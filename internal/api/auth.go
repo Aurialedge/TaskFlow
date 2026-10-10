@@ -17,9 +17,9 @@ func APIKeyAuthMiddleware(expectedKey string) func(http.Handler) http.Handler {
 				return
 			}
 
-			// Whitelist system endpoints (health probes, metrics)
+			// Whitelist system endpoints (root dashboard, health probes, metrics)
 			path := r.URL.Path
-			if path == "/health/live" || path == "/health/ready" || path == "/metrics" {
+			if path == "/" || path == "/health/live" || path == "/health/ready" || path == "/metrics" {
 				next.ServeHTTP(w, r)
 				return
 			}

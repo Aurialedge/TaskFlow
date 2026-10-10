@@ -32,6 +32,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 
 	healthHandler := NewHealthHandler(cfg.Database)
 
+	r.Get("/", HandleRoot)
 	r.Get("/health/live", healthHandler.Live)
 	r.Get("/health/ready", healthHandler.Ready)
 	r.Handle("/metrics", promhttp.Handler())
