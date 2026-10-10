@@ -114,18 +114,32 @@ func TestConfig_Validate(t *testing.T) {
 }
 
 func TestDatabaseConfig_ConnectionString(t *testing.T) {
-	dbCfg := DatabaseConfig{
-		Host:     "dbhost",
-		Port:     5432,
-		User:     "user",
-		Password: "secret",
-		Database: "mydb",
-		SSLMode:  "disable",
-	}
+	t.Run("constructs from fields", func(t *testing.T) {
+		dbCfg := DatabaseConfig{
+			Host:     "dbhost",
+			Port:     5432,
+			User:     "user",
+			Password: "secret",
+			Database: "mydb",
+			SSLMode:  "disable",
+		}
 
-	expected := "postgres://user:secret@dbhost:5432/mydb?sslmode=disable"
-	actual := dbCfg.ConnectionString()
-	if actual != expected {
-		t.Errorf("expected %s, got %s", expected, actual)
-	}
+		expected := "postgres://user:secret@dbhost:5432/mydb?sslmode=disable"
+		actual := dbCfg.ConnectionString()
+		if actual != expected {
+			t.Errorf("expected %s, got %s", expected, actual)
+		}
+	})
+
+	t.Run("uses RawURL when provided", func(t *testing.T) {
+		customURL := "postgres://renderuser:pass123@dpg-host:5432/renderdb?sslmode=require"
+		dbCfg := DatabaseConfig{
+			URL: customURL,
+		}
+
+		actual := dbCfg.ConnectionString()
+		if actual != customURL {
+			t.Errorf("expected %s, got %s", customURL, actual)
+		}
+	})
 }

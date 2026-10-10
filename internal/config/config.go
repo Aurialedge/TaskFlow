@@ -28,6 +28,7 @@ type HTTPConfig struct {
 
 // DatabaseConfig holds PostgreSQL connection and pool parameters.
 type DatabaseConfig struct {
+	URL             string
 	Host            string
 	Port            int
 	User            string
@@ -50,6 +51,9 @@ type WorkerConfig struct {
 
 // ConnectionString returns the PostgreSQL DSN formatted connection string.
 func (c *DatabaseConfig) ConnectionString() string {
+	if strings.TrimSpace(c.URL) != "" {
+		return strings.TrimSpace(c.URL)
+	}
 	return fmt.Sprintf(
 		"postgres://%s:%s@%s:%d/%s?sslmode=%s",
 		c.User, c.Password, c.Host, c.Port, c.Database, c.SSLMode,
@@ -69,6 +73,7 @@ func Load() (*Config, error) {
 			APIKey: getEnvString("API_KEY", ""),
 		},
 		Database: DatabaseConfig{
+			URL:             getEnvString("DATABASE_URL", ""),
 			Host:            getEnvString("DB_HOST", "localhost"),
 			Port:            getEnvInt("DB_PORT", 5432),
 			User:            getEnvString("DB_USER", "taskflow"),
@@ -101,20 +106,22 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("http port must be between 1 and 65535, got %d", c.HTTP.Port)
 	}
 
-	if strings.TrimSpace(c.Database.Host) == "" {
-		return fmt.Errorf("database host cannot be empty")
-	}
+	if strings.TrimSpace(c.Database.URL) == "" {
+		if strings.TrimSpace(c.Database.Host) == "" {
+			return fmt.Errorf("database host cannot be empty")
+		}
 
-	if c.Database.Port <= 0 || c.Database.Port > 65535 {
-		return fmt.Errorf("database port must be between 1 and 65535, got %d", c.Database.Port)
-	}
+		if c.Database.Port <= 0 || c.Database.Port > 65535 {
+			return fmt.Errorf("database port must be between 1 and 65535, got %d", c.Database.Port)
+		}
 
-	if strings.TrimSpace(c.Database.User) == "" {
-		return fmt.Errorf("database user cannot be empty")
-	}
+		if strings.TrimSpace(c.Database.User) == "" {
+			return fmt.Errorf("database user cannot be empty")
+		}
 
-	if strings.TrimSpace(c.Database.Database) == "" {
-		return fmt.Errorf("database name cannot be empty")
+		if strings.TrimSpace(c.Database.Database) == "" {
+			return fmt.Errorf("database name cannot be empty")
+		}
 	}
 
 	if c.Database.MaxConns < c.Database.MinConns {
