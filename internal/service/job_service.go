@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/Aurialedge/TaskFlow/internal/domain"
+	"github.com/Aurialedge/TaskFlow/internal/observability"
 	"github.com/Aurialedge/TaskFlow/internal/repository"
 )
 
@@ -112,7 +113,11 @@ func (s *JobService) SubmitJob(ctx context.Context, input domain.CreateJobInput)
 		UpdatedAt:        now,
 	}
 
-	return s.repo.CreateJob(ctx, job)
+	createdJob, created, err := s.repo.CreateJob(ctx, job)
+	if err == nil && created {
+		observability.GetMetrics().IncJobsSubmitted(createdJob.Queue, createdJob.Type)
+	}
+	return createdJob, created, err
 }
 
 // GetJob retrieves a job by UUID and optionally includes execution attempts.

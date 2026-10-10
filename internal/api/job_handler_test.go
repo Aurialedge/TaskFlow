@@ -89,11 +89,11 @@ func (m *mockRepoForHandler) RecordAttempt(ctx context.Context, attempt *domain.
 	return nil
 }
 
-func (m *mockRepoForHandler) RecordOutcome(ctx context.Context, jobID uuid.UUID, leaseToken uuid.UUID, result []byte, execErr error, backoff time.Duration, isPermanent bool) (domain.State, error) {
+func (m *mockRepoForHandler) RecordOutcome(ctx context.Context, jobID uuid.UUID, leaseToken uuid.UUID, leaseGen int64, result []byte, execErr error, backoff time.Duration, isPermanent bool) (domain.State, error) {
 	return domain.StateSucceeded, nil
 }
 
-func (m *mockRepoForHandler) RenewLease(ctx context.Context, jobID uuid.UUID, leaseToken uuid.UUID, duration time.Duration) error {
+func (m *mockRepoForHandler) RenewLease(ctx context.Context, jobID uuid.UUID, leaseToken uuid.UUID, leaseGen int64, duration time.Duration) error {
 	return nil
 }
 

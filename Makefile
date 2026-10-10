@@ -1,4 +1,4 @@
-.PHONY: all build test test-race tidy run-api run-worker docker-up docker-down
+.PHONY: all build test test-race bench tidy run-api run-worker docker-up docker-down
 
 all: build test
 
@@ -14,6 +14,9 @@ test:
 
 test-race:
 	go test -v -race ./...
+
+bench:
+	go test -bench=Benchmark -benchmem -run="^$$" ./tests/load
 
 run-api:
 	go run ./cmd/api

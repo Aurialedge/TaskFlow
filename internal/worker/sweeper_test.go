@@ -44,10 +44,10 @@ func (m *mockRepoForSweeper) RecordFailure(ctx context.Context, jobID uuid.UUID,
 func (m *mockRepoForSweeper) RecordAttempt(ctx context.Context, attempt *domain.JobAttempt) error {
 	return nil
 }
-func (m *mockRepoForSweeper) RecordOutcome(ctx context.Context, jobID uuid.UUID, leaseToken uuid.UUID, result []byte, execErr error, backoff time.Duration, isPermanent bool) (domain.State, error) {
+func (m *mockRepoForSweeper) RecordOutcome(ctx context.Context, jobID uuid.UUID, leaseToken uuid.UUID, leaseGen int64, result []byte, execErr error, backoff time.Duration, isPermanent bool) (domain.State, error) {
 	return domain.StateSucceeded, nil
 }
-func (m *mockRepoForSweeper) RenewLease(ctx context.Context, jobID uuid.UUID, leaseToken uuid.UUID, duration time.Duration) error {
+func (m *mockRepoForSweeper) RenewLease(ctx context.Context, jobID uuid.UUID, leaseToken uuid.UUID, leaseGen int64, duration time.Duration) error {
 	return nil
 }
 func (m *mockRepoForSweeper) CancelJob(ctx context.Context, jobID uuid.UUID) (*domain.Job, error) {

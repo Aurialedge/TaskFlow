@@ -82,7 +82,7 @@ func (m *mockRepoForWorker) RecordAttempt(ctx context.Context, attempt *domain.J
 	return nil
 }
 
-func (m *mockRepoForWorker) RecordOutcome(ctx context.Context, jobID uuid.UUID, leaseToken uuid.UUID, result []byte, execErr error, backoff time.Duration, isPermanent bool) (domain.State, error) {
+func (m *mockRepoForWorker) RecordOutcome(ctx context.Context, jobID uuid.UUID, leaseToken uuid.UUID, leaseGen int64, result []byte, execErr error, backoff time.Duration, isPermanent bool) (domain.State, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if execErr == nil {
@@ -96,7 +96,7 @@ func (m *mockRepoForWorker) RecordOutcome(ctx context.Context, jobID uuid.UUID, 
 	return domain.StateScheduled, nil
 }
 
-func (m *mockRepoForWorker) RenewLease(ctx context.Context, jobID uuid.UUID, leaseToken uuid.UUID, duration time.Duration) error {
+func (m *mockRepoForWorker) RenewLease(ctx context.Context, jobID uuid.UUID, leaseToken uuid.UUID, leaseGen int64, duration time.Duration) error {
 	return nil
 }
 

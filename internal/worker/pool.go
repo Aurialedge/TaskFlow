@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/Aurialedge/TaskFlow/internal/domain"
+	"github.com/Aurialedge/TaskFlow/internal/observability"
 	"github.com/Aurialedge/TaskFlow/internal/repository"
 	"github.com/Aurialedge/TaskFlow/internal/retry"
 )
@@ -161,7 +162,7 @@ func (p *Pool) processJob(job *domain.Job, workerIndex int) {
 	// Launch background heartbeat renewal during job execution
 	heartbeatDone := make(chan struct{})
 	if job.LeaseToken != nil {
-		go p.runHeartbeat(execCtx, job.ID, *job.LeaseToken, heartbeatDone)
+		go p.runHeartbeat(execCtx, job.ID, *job.LeaseToken, job.LeaseGeneration, heartbeatDone)
 	} else {
 		close(heartbeatDone)
 	}
@@ -170,14 +171,21 @@ func (p *Pool) processJob(job *domain.Job, workerIndex int) {
 	close(heartbeatDone)
 
 	finishedAt := time.Now().UTC()
-	durationMs := finishedAt.Sub(startedAt).Milliseconds()
+	duration := finishedAt.Sub(startedAt)
+	durationMs := duration.Milliseconds()
 
 	// Determine backoff and error classification
 	var backoff time.Duration
 	isPermanent := false
+	statusStr := string(domain.StateSucceeded)
 	if execErr != nil {
 		isPermanent = retry.IsPermanent(execErr)
 		backoff = p.backoff.Calculate(job.AttemptCount)
+		if isPermanent || job.AttemptCount >= job.MaxAttempts {
+			statusStr = string(domain.StateDead)
+		} else {
+			statusStr = string(domain.StateFailed)
+		}
 		slog.Error("job execution failed",
 			"job_id", job.ID.String(),
 			"job_type", job.Type,
@@ -196,12 +204,15 @@ func (p *Pool) processJob(job *domain.Job, workerIndex int) {
 		)
 	}
 
+	observability.GetMetrics().RecordJobCompleted(job.Queue, job.Type, statusStr, duration)
+
 	// Persist outcome atomically with retry / dead-letter transitions
 	if job.LeaseToken != nil {
 		persistedState, outcomeErr := p.repo.RecordOutcome(
 			p.ctx,
 			job.ID,
 			*job.LeaseToken,
+			job.LeaseGeneration,
 			result,
 			execErr,
 			backoff,
@@ -234,7 +245,7 @@ func (p *Pool) processJob(job *domain.Job, workerIndex int) {
 	})
 }
 
-func (p *Pool) runHeartbeat(ctx context.Context, jobID, leaseToken uuid.UUID, done chan struct{}) {
+func (p *Pool) runHeartbeat(ctx context.Context, jobID, leaseToken uuid.UUID, leaseGen int64, done chan struct{}) {
 	ticker := time.NewTicker(p.heartbeatInterval)
 	defer ticker.Stop()
 
@@ -245,7 +256,7 @@ func (p *Pool) runHeartbeat(ctx context.Context, jobID, leaseToken uuid.UUID, do
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := p.repo.RenewLease(ctx, jobID, leaseToken, p.leaseDuration); err != nil {
+			if err := p.repo.RenewLease(ctx, jobID, leaseToken, leaseGen, p.leaseDuration); err != nil {
 				slog.Warn("heartbeat lease renewal failed", "job_id", jobID.String(), "error", err)
 				return
 			}

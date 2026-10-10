@@ -22,7 +22,8 @@ type Config struct {
 
 // HTTPConfig defines settings for the HTTP API server.
 type HTTPConfig struct {
-	Port int
+	Port   int
+	APIKey string
 }
 
 // DatabaseConfig holds PostgreSQL connection and pool parameters.
@@ -64,7 +65,8 @@ func Load() (*Config, error) {
 		LogLevel:        getEnvString("LOG_LEVEL", "info"),
 		ShutdownTimeout: time.Duration(getEnvInt("SHUTDOWN_TIMEOUT_SECONDS", 15)) * time.Second,
 		HTTP: HTTPConfig{
-			Port: getEnvInt("PORT", 8080),
+			Port:   getEnvInt("PORT", 8080),
+			APIKey: getEnvString("API_KEY", ""),
 		},
 		Database: DatabaseConfig{
 			Host:            getEnvString("DB_HOST", "localhost"),

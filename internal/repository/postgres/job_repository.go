@@ -395,6 +395,7 @@ func (r *JobRepository) RecordOutcome(
 	ctx context.Context,
 	jobID uuid.UUID,
 	leaseToken uuid.UUID,
+	leaseGen int64,
 	result []byte,
 	execErr error,
 	backoff time.Duration,
@@ -410,12 +411,12 @@ func (r *JobRepository) RecordOutcome(
 	checkQuery := `
 		SELECT attempt_count, max_attempts
 		FROM jobs
-		WHERE id = $1 AND lease_token = $2
+		WHERE id = $1 AND lease_token = $2 AND lease_generation = $3
 		FOR UPDATE;
 	`
-	if err := tx.QueryRow(ctx, checkQuery, jobID, leaseToken).Scan(&attemptCount, &maxAttempts); err != nil {
+	if err := tx.QueryRow(ctx, checkQuery, jobID, leaseToken, leaseGen).Scan(&attemptCount, &maxAttempts); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return "", fmt.Errorf("job outcome not recorded: lease token mismatch or job no longer active")
+			return "", fmt.Errorf("job outcome not recorded: lease token or generation mismatch (stale worker fenced)")
 		}
 		return "", fmt.Errorf("failed to query job for outcome: %w", err)
 	}
@@ -485,23 +486,23 @@ func (r *JobRepository) RecordOutcome(
 	return finalState, nil
 }
 
-// RenewLease extends the expiration time of a running job's lease.
-func (r *JobRepository) RenewLease(ctx context.Context, jobID uuid.UUID, leaseToken uuid.UUID, duration time.Duration) error {
+// RenewLease extends the expiration time of a running job's lease, verified against fencing token.
+func (r *JobRepository) RenewLease(ctx context.Context, jobID uuid.UUID, leaseToken uuid.UUID, leaseGen int64, duration time.Duration) error {
 	now := time.Now().UTC()
 	newExpiresAt := now.Add(duration)
 
 	query := `
 		UPDATE jobs
-		SET lease_expires_at = $3,
-		    updated_at = $4
-		WHERE id = $1 AND lease_token = $2 AND state = 'running';
+		SET lease_expires_at = $4,
+		    updated_at = $5
+		WHERE id = $1 AND lease_token = $2 AND lease_generation = $3 AND state = 'running';
 	`
-	res, err := r.pool.Exec(ctx, query, jobID, leaseToken, newExpiresAt, now)
+	res, err := r.pool.Exec(ctx, query, jobID, leaseToken, leaseGen, newExpiresAt, now)
 	if err != nil {
 		return fmt.Errorf("failed to renew lease: %w", err)
 	}
 	if res.RowsAffected() == 0 {
-		return fmt.Errorf("lease renewal failed: token expired or mismatched")
+		return fmt.Errorf("lease renewal failed: token expired or fenced")
 	}
 	return nil
 }

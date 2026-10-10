@@ -40,11 +40,11 @@ type JobRepository interface {
 	RecordAttempt(ctx context.Context, attempt *domain.JobAttempt) error
 
 	// RecordOutcome durably records success or failure with retry backoff and dead-lettering.
-	// Returns the resulting domain.State of the job.
-	RecordOutcome(ctx context.Context, jobID uuid.UUID, leaseToken uuid.UUID, result []byte, execErr error, backoff time.Duration, isPermanent bool) (domain.State, error)
+	// Validates leaseToken and leaseGen (fencing token) to prevent stale/zombie worker updates.
+	RecordOutcome(ctx context.Context, jobID uuid.UUID, leaseToken uuid.UUID, leaseGen int64, result []byte, execErr error, backoff time.Duration, isPermanent bool) (domain.State, error)
 
-	// RenewLease extends the expiration time of a running job's lease.
-	RenewLease(ctx context.Context, jobID uuid.UUID, leaseToken uuid.UUID, duration time.Duration) error
+	// RenewLease extends the expiration time of a running job's lease, guarded by fencing token.
+	RenewLease(ctx context.Context, jobID uuid.UUID, leaseToken uuid.UUID, leaseGen int64, duration time.Duration) error
 
 	// RecoverAbandonedJobs finds jobs stuck in running with expired leases and either re-queues them or dead-letters them.
 	RecoverAbandonedJobs(ctx context.Context, defaultLeaseDuration time.Duration) (int64, error)

@@ -57,6 +57,7 @@ func main() {
 	router := api.NewRouter(api.RouterConfig{
 		Database:   dbClient,
 		JobService: jobService,
+		APIKey:     cfg.HTTP.APIKey,
 	})
 
 	server := &http.Server{

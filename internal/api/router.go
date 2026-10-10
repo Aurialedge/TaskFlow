@@ -8,6 +8,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+
 	"github.com/Aurialedge/TaskFlow/internal/service"
 )
 
@@ -15,6 +17,7 @@ import (
 type RouterConfig struct {
 	Database   DatabasePinger
 	JobService *service.JobService
+	APIKey     string
 }
 
 // NewRouter constructs a chi.Mux router with standard middleware and routes.
@@ -25,11 +28,13 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	r.Use(middleware.RealIP)
 	r.Use(slogMiddleware)
 	r.Use(middleware.Recoverer)
+	r.Use(APIKeyAuthMiddleware(cfg.APIKey))
 
 	healthHandler := NewHealthHandler(cfg.Database)
 
 	r.Get("/health/live", healthHandler.Live)
 	r.Get("/health/ready", healthHandler.Ready)
+	r.Handle("/metrics", promhttp.Handler())
 
 	// API v1 group
 	r.Route("/api/v1", func(v1 chi.Router) {
