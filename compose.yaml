@@ -1,0 +1,64 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: taskflow-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: taskflow
+      POSTGRES_PASSWORD: taskflow_secret
+      POSTGRES_DB: taskflow
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U taskflow -d taskflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: taskflow-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ENV: development
+      PORT: 8080
+      LOG_LEVEL: debug
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: taskflow
+      DB_PASSWORD: taskflow_secret
+      DB_NAME: taskflow
+      DB_SSLMODE: disable
+    ports:
+      - "8080:8080"
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: taskflow-worker
+    restart: unless-stopped
+    command: ["/app/bin/worker"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ENV: development
+      LOG_LEVEL: debug
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: taskflow
+      DB_PASSWORD: taskflow_secret
+      DB_NAME: taskflow
+      DB_SSLMODE: disable
+      WORKER_CONCURRENCY: 10
+
+volumes:
+  pgdata:
