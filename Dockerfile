@@ -23,7 +23,9 @@ WORKDIR /app
 COPY --from=builder /app/bin/api /app/bin/api
 COPY --from=builder /app/bin/worker /app/bin/worker
 COPY --from=builder /app/migrations /app/migrations
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
 
 EXPOSE 8080
 
-CMD ["/app/bin/api"]
+ENTRYPOINT ["/app/entrypoint.sh"]

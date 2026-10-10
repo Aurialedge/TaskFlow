@@ -36,6 +36,7 @@ services:
       DB_PASSWORD: taskflow_secret
       DB_NAME: taskflow
       DB_SSLMODE: disable
+      RUN_WORKER: "false"
     ports:
       - "8080:8080"
 
