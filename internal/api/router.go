@@ -7,11 +7,14 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+
+	"github.com/Aurialedge/TaskFlow/internal/service"
 )
 
 // RouterConfig holds dependencies required to build the HTTP router.
 type RouterConfig struct {
-	Database DatabasePinger
+	Database   DatabasePinger
+	JobService *service.JobService
 }
 
 // NewRouter constructs a chi.Mux router with standard middleware and routes.
@@ -35,6 +38,13 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 				"message": "TaskFlow API v1 is active",
 			})
 		})
+
+		if cfg.JobService != nil {
+			jobHandler := NewJobHandler(cfg.JobService)
+			v1.Post("/jobs", jobHandler.SubmitJob)
+			v1.Get("/jobs/{id}", jobHandler.GetJob)
+			v1.Get("/jobs", jobHandler.ListJobs)
+		}
 	})
 
 	return r

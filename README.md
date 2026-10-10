@@ -112,7 +112,7 @@ docker compose up -d
 ## Development Phases
 
 - [x] **Phase 1**: Project skeleton, configuration, logging, PostgreSQL pool, embedded SQL migrations, health checks, Docker Compose.
-- [ ] **Phase 2**: Domain models, job repository, job submission API (`POST /api/v1/jobs`), job status API (`GET /api/v1/jobs/{id}`), payload validation, idempotency.
+- [x] **Phase 2**: Domain models, job repository, job submission API (`POST /api/v1/jobs`), job status API (`GET /api/v1/jobs/{id}`), payload validation, idempotency.
 - [ ] **Phase 3**: Handler registry, atomic job claiming (`SELECT FOR UPDATE SKIP LOCKED`), dispatcher, bounded worker pool.
 - [ ] **Phase 4**: Exponential retry backoff, attempt history, dead-lettering, timeouts, leases & heartbeats, recovery sweeper.
 - [ ] **Phase 5**: Priority queues, delayed execution (`run_at`), cancellation, manual retries, queue statistics.

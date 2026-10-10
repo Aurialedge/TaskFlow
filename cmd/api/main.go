@@ -12,6 +12,7 @@ import (
 	"github.com/Aurialedge/TaskFlow/internal/config"
 	"github.com/Aurialedge/TaskFlow/internal/observability"
 	"github.com/Aurialedge/TaskFlow/internal/repository/postgres"
+	"github.com/Aurialedge/TaskFlow/internal/service"
 	"github.com/Aurialedge/TaskFlow/internal/shutdown"
 )
 
@@ -33,6 +34,8 @@ func main() {
 	defer dbCancel()
 
 	var dbClient *postgres.Client
+	var jobService *service.JobService
+
 	dbClient, err = postgres.NewClient(dbCtx, cfg.Database)
 	if err != nil {
 		logger.Warn("could not establish initial database connection; ready check will report 503", "error", err)
@@ -46,9 +49,15 @@ func main() {
 			logger.Error("failed to apply database migrations", "error", err)
 			return
 		}
+
+		jobRepo := postgres.NewJobRepository(dbClient.Pool)
+		jobService = service.NewJobService(jobRepo)
 	}
 
-	router := api.NewRouter(api.RouterConfig{Database: dbClient})
+	router := api.NewRouter(api.RouterConfig{
+		Database:   dbClient,
+		JobService: jobService,
+	})
 
 	server := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.HTTP.Port),
