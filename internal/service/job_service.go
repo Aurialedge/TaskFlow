@@ -137,3 +137,22 @@ func (s *JobService) ListJobs(ctx context.Context, filter domain.ListJobsFilter)
 	}
 	return s.repo.ListJobs(ctx, filter)
 }
+
+// CancelJob cancels a job if it has not already reached a terminal state.
+func (s *JobService) CancelJob(ctx context.Context, id uuid.UUID) (*domain.Job, error) {
+	return s.repo.CancelJob(ctx, id)
+}
+
+// ManualRetryJob re-queues an exhausted or failed job for re-execution.
+func (s *JobService) ManualRetryJob(ctx context.Context, id uuid.UUID) (*domain.Job, error) {
+	return s.repo.ManualRetryJob(ctx, id)
+}
+
+// GetQueueStats returns operational depths and counts for the requested queue.
+func (s *JobService) GetQueueStats(ctx context.Context, queue string) (*domain.QueueStats, error) {
+	q := strings.TrimSpace(queue)
+	if q == "" {
+		q = DefaultQueue
+	}
+	return s.repo.QueueStats(ctx, q)
+}

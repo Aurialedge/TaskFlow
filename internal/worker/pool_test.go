@@ -82,6 +82,40 @@ func (m *mockRepoForWorker) RecordAttempt(ctx context.Context, attempt *domain.J
 	return nil
 }
 
+func (m *mockRepoForWorker) RecordOutcome(ctx context.Context, jobID uuid.UUID, leaseToken uuid.UUID, result []byte, execErr error, backoff time.Duration, isPermanent bool) (domain.State, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if execErr == nil {
+		m.successCalls[jobID] = result
+		return domain.StateSucceeded, nil
+	}
+	m.failureCalls[jobID] = execErr.Error()
+	if isPermanent {
+		return domain.StateDead, nil
+	}
+	return domain.StateScheduled, nil
+}
+
+func (m *mockRepoForWorker) RenewLease(ctx context.Context, jobID uuid.UUID, leaseToken uuid.UUID, duration time.Duration) error {
+	return nil
+}
+
+func (m *mockRepoForWorker) RecoverAbandonedJobs(ctx context.Context, defaultLeaseDuration time.Duration) (int64, error) {
+	return 0, nil
+}
+
+func (m *mockRepoForWorker) CancelJob(ctx context.Context, jobID uuid.UUID) (*domain.Job, error) {
+	return nil, nil
+}
+
+func (m *mockRepoForWorker) ManualRetryJob(ctx context.Context, jobID uuid.UUID) (*domain.Job, error) {
+	return nil, nil
+}
+
+func (m *mockRepoForWorker) QueueStats(ctx context.Context, queue string) (*domain.QueueStats, error) {
+	return nil, nil
+}
+
 func TestPool_SuccessfulExecution(t *testing.T) {
 	repo := newMockRepoForWorker()
 	registry := NewDefaultRegistry()

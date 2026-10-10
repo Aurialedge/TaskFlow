@@ -89,6 +89,67 @@ func (m *mockRepoForHandler) RecordAttempt(ctx context.Context, attempt *domain.
 	return nil
 }
 
+func (m *mockRepoForHandler) RecordOutcome(ctx context.Context, jobID uuid.UUID, leaseToken uuid.UUID, result []byte, execErr error, backoff time.Duration, isPermanent bool) (domain.State, error) {
+	return domain.StateSucceeded, nil
+}
+
+func (m *mockRepoForHandler) RenewLease(ctx context.Context, jobID uuid.UUID, leaseToken uuid.UUID, duration time.Duration) error {
+	return nil
+}
+
+func (m *mockRepoForHandler) RecoverAbandonedJobs(ctx context.Context, defaultLeaseDuration time.Duration) (int64, error) {
+	return 0, nil
+}
+
+func (m *mockRepoForHandler) CancelJob(ctx context.Context, jobID uuid.UUID) (*domain.Job, error) {
+	job, ok := m.jobs[jobID]
+	if !ok {
+		return nil, domain.ErrJobNotFound
+	}
+	if job.State == domain.StateSucceeded || job.State == domain.StateCancelled {
+		return nil, domain.ErrInvalidStateTransition
+	}
+	job.State = domain.StateCancelled
+	return job, nil
+}
+
+func (m *mockRepoForHandler) ManualRetryJob(ctx context.Context, jobID uuid.UUID) (*domain.Job, error) {
+	job, ok := m.jobs[jobID]
+	if !ok {
+		return nil, domain.ErrJobNotFound
+	}
+	if job.State != domain.StateFailed && job.State != domain.StateDead {
+		return nil, domain.ErrInvalidStateTransition
+	}
+	job.State = domain.StatePending
+	job.AttemptCount = 0
+	return job, nil
+}
+
+func (m *mockRepoForHandler) QueueStats(ctx context.Context, queue string) (*domain.QueueStats, error) {
+	stats := &domain.QueueStats{Queue: queue}
+	for _, j := range m.jobs {
+		if j.Queue == queue {
+			stats.Total++
+			switch j.State {
+			case domain.StatePending:
+				stats.Pending++
+			case domain.StateRunning:
+				stats.Running++
+			case domain.StateSucceeded:
+				stats.Succeeded++
+			case domain.StateFailed:
+				stats.Failed++
+			case domain.StateDead:
+				stats.Dead++
+			case domain.StateCancelled:
+				stats.Cancelled++
+			}
+		}
+	}
+	return stats, nil
+}
+
 func setupTestApp() (*mockRepoForHandler, http.Handler) {
 	repo := newMockRepoForHandler()
 	svc := service.NewJobService(repo)
@@ -318,4 +379,93 @@ func TestJobHandler_ListJobs(t *testing.T) {
 			t.Fatalf("expected 400 Bad Request, got %d", rec.Code)
 		}
 	})
+}
+
+func TestJobHandler_CancelAndRetry(t *testing.T) {
+	repo, router := setupTestApp()
+
+	// Create a job
+	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/jobs", bytes.NewBufferString(`{"type":"echo","queue":"default"}`))
+	createRec := httptest.NewRecorder()
+	router.ServeHTTP(createRec, createReq)
+
+	var created domain.Job
+	_ = json.Unmarshal(createRec.Body.Bytes(), &created)
+
+	t.Run("cancel pending job returns 200 OK", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/jobs/"+created.ID.String()+"/cancel", nil)
+		rec := httptest.NewRecorder()
+
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK, got %d", rec.Code)
+		}
+
+		var cancelled domain.Job
+		_ = json.Unmarshal(rec.Body.Bytes(), &cancelled)
+		if cancelled.State != domain.StateCancelled {
+			t.Errorf("expected cancelled state, got %s", cancelled.State)
+		}
+	})
+
+	t.Run("cancel already cancelled job returns 409 Conflict", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/jobs/"+created.ID.String()+"/cancel", nil)
+		rec := httptest.NewRecorder()
+
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusConflict {
+			t.Fatalf("expected 409 Conflict, got %d", rec.Code)
+		}
+	})
+
+	t.Run("manual retry failed/dead job returns 200 OK", func(t *testing.T) {
+		// Set job state to dead
+		repo.jobs[created.ID].State = domain.StateDead
+
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/jobs/"+created.ID.String()+"/retry", nil)
+		rec := httptest.NewRecorder()
+
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK, got %d", rec.Code)
+		}
+
+		var retried domain.Job
+		_ = json.Unmarshal(rec.Body.Bytes(), &retried)
+		if retried.State != domain.StatePending {
+			t.Errorf("expected state pending, got %s", retried.State)
+		}
+	})
+}
+
+func TestJobHandler_GetQueueStats(t *testing.T) {
+	_, router := setupTestApp()
+
+	// Seed jobs into 'reports' queue
+	router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/api/v1/jobs", bytes.NewBufferString(`{"type":"r1","queue":"reports"}`)))
+	router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/api/v1/jobs", bytes.NewBufferString(`{"type":"r2","queue":"reports"}`)))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/queues/reports/stats", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d", rec.Code)
+	}
+
+	var stats domain.QueueStats
+	if err := json.Unmarshal(rec.Body.Bytes(), &stats); err != nil {
+		t.Fatalf("failed to decode stats: %v", err)
+	}
+
+	if stats.Queue != "reports" {
+		t.Errorf("expected queue reports, got %s", stats.Queue)
+	}
+	if stats.Total != 2 {
+		t.Errorf("expected total 2, got %d", stats.Total)
+	}
 }

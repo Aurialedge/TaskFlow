@@ -8,46 +8,81 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/Aurialedge/TaskFlow/internal/domain"
 	"github.com/Aurialedge/TaskFlow/internal/repository"
+	"github.com/Aurialedge/TaskFlow/internal/retry"
 )
 
-// Pool executes claimed jobs using a bounded pool of goroutine workers.
+// Pool executes claimed jobs using a bounded pool of goroutine workers with lease heartbeats and retries.
 type Pool struct {
-	concurrency int
-	workerID    string
-	repo        repository.JobRepository
-	registry    *Registry
-	jobQueue    chan *domain.Job
-	wg          sync.WaitGroup
-	ctx         context.Context
-	cancel      context.CancelFunc
-	closed      bool
-	mu          sync.Mutex
+	concurrency       int
+	workerID          string
+	repo              repository.JobRepository
+	registry          *Registry
+	backoff           *retry.BackoffManager
+	leaseDuration     time.Duration
+	heartbeatInterval time.Duration
+	jobQueue          chan *domain.Job
+	wg                sync.WaitGroup
+	ctx               context.Context
+	cancel            context.CancelFunc
+	closed            bool
+	mu                sync.Mutex
+}
+
+// PoolConfig specifies parameters for worker pool construction.
+type PoolConfig struct {
+	Concurrency       int
+	WorkerID          string
+	LeaseDuration     time.Duration
+	HeartbeatInterval time.Duration
 }
 
 // NewPool initializes a new bounded worker pool.
 func NewPool(concurrency int, workerID string, repo repository.JobRepository, registry *Registry) *Pool {
+	return NewPoolWithConfig(repo, registry, PoolConfig{
+		Concurrency:       concurrency,
+		WorkerID:          workerID,
+		LeaseDuration:     30 * time.Second,
+		HeartbeatInterval: 10 * time.Second,
+	})
+}
+
+// NewPoolWithConfig initializes a new bounded worker pool with full configuration.
+func NewPoolWithConfig(repo repository.JobRepository, registry *Registry, cfg PoolConfig) *Pool {
+	concurrency := cfg.Concurrency
 	if concurrency <= 0 {
 		concurrency = 5
 	}
+	workerID := cfg.WorkerID
 	if workerID == "" {
 		workerID = "worker-" + fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	leaseDuration := cfg.LeaseDuration
+	if leaseDuration <= 0 {
+		leaseDuration = 30 * time.Second
+	}
+	heartbeatInterval := cfg.HeartbeatInterval
+	if heartbeatInterval <= 0 || heartbeatInterval >= leaseDuration {
+		heartbeatInterval = leaseDuration / 3
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	p := &Pool{
-		concurrency: concurrency,
-		workerID:    workerID,
-		repo:        repo,
-		registry:    registry,
-		jobQueue:    make(chan *domain.Job, concurrency*2),
-		ctx:         ctx,
-		cancel:      cancel,
+	return &Pool{
+		concurrency:       concurrency,
+		workerID:          workerID,
+		repo:              repo,
+		registry:          registry,
+		backoff:           retry.NewBackoffManager(1*time.Second, 60*time.Second),
+		leaseDuration:     leaseDuration,
+		heartbeatInterval: heartbeatInterval,
+		jobQueue:          make(chan *domain.Job, concurrency*2),
+		ctx:               ctx,
+		cancel:            cancel,
 	}
-
-	return p
 }
 
 // Start launches the worker goroutines.
@@ -123,57 +158,100 @@ func (p *Pool) processJob(job *domain.Job, workerIndex int) {
 	execCtx, cancel := context.WithTimeout(p.ctx, timeout)
 	defer cancel()
 
+	// Launch background heartbeat renewal during job execution
+	heartbeatDone := make(chan struct{})
+	if job.LeaseToken != nil {
+		go p.runHeartbeat(execCtx, job.ID, *job.LeaseToken, heartbeatDone)
+	} else {
+		close(heartbeatDone)
+	}
+
 	result, execErr := p.executeHandlerSafe(execCtx, job.Type, job.Payload)
+	close(heartbeatDone)
+
 	finishedAt := time.Now().UTC()
 	durationMs := finishedAt.Sub(startedAt).Milliseconds()
 
+	// Determine backoff and error classification
+	var backoff time.Duration
+	isPermanent := false
 	if execErr != nil {
+		isPermanent = retry.IsPermanent(execErr)
+		backoff = p.backoff.Calculate(job.AttemptCount)
 		slog.Error("job execution failed",
 			"job_id", job.ID.String(),
 			"job_type", job.Type,
 			"attempt", job.AttemptCount,
 			"error", execErr,
+			"is_permanent", isPermanent,
+			"retry_backoff", backoff,
 			"duration_ms", durationMs,
 		)
-
-		errMsg := execErr.Error()
-		if job.LeaseToken != nil {
-			_ = p.repo.RecordFailure(p.ctx, job.ID, *job.LeaseToken, errMsg)
-		}
-
-		_ = p.repo.RecordAttempt(p.ctx, &domain.JobAttempt{
-			JobID:         job.ID,
-			AttemptNumber: job.AttemptCount,
-			WorkerID:      p.workerID,
-			State:         domain.StateFailed,
-			ErrorMessage:  &errMsg,
-			StartedAt:     startedAt,
-			FinishedAt:    &finishedAt,
-			DurationMs:    &durationMs,
-		})
-		return
+	} else {
+		slog.Info("job execution succeeded",
+			"job_id", job.ID.String(),
+			"job_type", job.Type,
+			"attempt", job.AttemptCount,
+			"duration_ms", durationMs,
+		)
 	}
 
-	slog.Info("job execution succeeded",
-		"job_id", job.ID.String(),
-		"job_type", job.Type,
-		"attempt", job.AttemptCount,
-		"duration_ms", durationMs,
-	)
-
+	// Persist outcome atomically with retry / dead-letter transitions
 	if job.LeaseToken != nil {
-		_ = p.repo.RecordSuccess(p.ctx, job.ID, *job.LeaseToken, result)
+		persistedState, outcomeErr := p.repo.RecordOutcome(
+			p.ctx,
+			job.ID,
+			*job.LeaseToken,
+			result,
+			execErr,
+			backoff,
+			isPermanent,
+		)
+		if outcomeErr != nil {
+			slog.Error("failed to record job outcome", "job_id", job.ID.String(), "error", outcomeErr)
+		} else {
+			slog.Info("job outcome recorded", "job_id", job.ID.String(), "resulting_state", persistedState)
+		}
+	}
+
+	var errMsg *string
+	attemptState := domain.StateSucceeded
+	if execErr != nil {
+		msg := execErr.Error()
+		errMsg = &msg
+		attemptState = domain.StateFailed
 	}
 
 	_ = p.repo.RecordAttempt(p.ctx, &domain.JobAttempt{
 		JobID:         job.ID,
 		AttemptNumber: job.AttemptCount,
 		WorkerID:      p.workerID,
-		State:         domain.StateSucceeded,
+		State:         attemptState,
+		ErrorMessage:  errMsg,
 		StartedAt:     startedAt,
 		FinishedAt:    &finishedAt,
 		DurationMs:    &durationMs,
 	})
+}
+
+func (p *Pool) runHeartbeat(ctx context.Context, jobID, leaseToken uuid.UUID, done chan struct{}) {
+	ticker := time.NewTicker(p.heartbeatInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-done:
+			return
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := p.repo.RenewLease(ctx, jobID, leaseToken, p.leaseDuration); err != nil {
+				slog.Warn("heartbeat lease renewal failed", "job_id", jobID.String(), "error", err)
+				return
+			}
+			slog.Debug("heartbeat renewed lease", "job_id", jobID.String())
+		}
+	}
 }
 
 func (p *Pool) executeHandlerSafe(ctx context.Context, jobType string, payload json.RawMessage) (result json.RawMessage, err error) {

@@ -38,4 +38,23 @@ type JobRepository interface {
 
 	// RecordAttempt records an execution attempt in the job_attempts table.
 	RecordAttempt(ctx context.Context, attempt *domain.JobAttempt) error
+
+	// RecordOutcome durably records success or failure with retry backoff and dead-lettering.
+	// Returns the resulting domain.State of the job.
+	RecordOutcome(ctx context.Context, jobID uuid.UUID, leaseToken uuid.UUID, result []byte, execErr error, backoff time.Duration, isPermanent bool) (domain.State, error)
+
+	// RenewLease extends the expiration time of a running job's lease.
+	RenewLease(ctx context.Context, jobID uuid.UUID, leaseToken uuid.UUID, duration time.Duration) error
+
+	// RecoverAbandonedJobs finds jobs stuck in running with expired leases and either re-queues them or dead-letters them.
+	RecoverAbandonedJobs(ctx context.Context, defaultLeaseDuration time.Duration) (int64, error)
+
+	// CancelJob cancels a pending or scheduled job, or marks a running job as cancelled.
+	CancelJob(ctx context.Context, jobID uuid.UUID) (*domain.Job, error)
+
+	// ManualRetryJob re-arms a terminal failed or dead job back into pending state.
+	ManualRetryJob(ctx context.Context, jobID uuid.UUID) (*domain.Job, error)
+
+	// QueueStats calculates depth and status counts for a queue.
+	QueueStats(ctx context.Context, queue string) (*domain.QueueStats, error)
 }

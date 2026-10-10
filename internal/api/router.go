@@ -44,6 +44,9 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			v1.Post("/jobs", jobHandler.SubmitJob)
 			v1.Get("/jobs/{id}", jobHandler.GetJob)
 			v1.Get("/jobs", jobHandler.ListJobs)
+			v1.Post("/jobs/{id}/cancel", jobHandler.CancelJob)
+			v1.Post("/jobs/{id}/retry", jobHandler.RetryJob)
+			v1.Get("/queues/{name}/stats", jobHandler.GetQueueStats)
 		}
 	})
 

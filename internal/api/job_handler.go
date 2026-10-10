@@ -195,6 +195,75 @@ func (h *JobHandler) ListJobs(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// CancelJob handles POST /api/v1/jobs/{id}/cancel.
+func (h *JobHandler) CancelJob(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	jobID, err := uuid.Parse(idStr)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "INVALID_UUID", "invalid job UUID format")
+		return
+	}
+
+	job, err := h.jobService.CancelJob(r.Context(), jobID)
+	if err != nil {
+		if errors.Is(err, domain.ErrJobNotFound) {
+			respondError(w, http.StatusNotFound, "NOT_FOUND", "job not found")
+			return
+		}
+		if errors.Is(err, domain.ErrInvalidStateTransition) {
+			respondError(w, http.StatusConflict, "CONFLICT", err.Error())
+			return
+		}
+		respondError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to cancel job: "+err.Error())
+		return
+	}
+
+	respondJSON(w, http.StatusOK, job)
+}
+
+// RetryJob handles POST /api/v1/jobs/{id}/retry.
+func (h *JobHandler) RetryJob(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	jobID, err := uuid.Parse(idStr)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "INVALID_UUID", "invalid job UUID format")
+		return
+	}
+
+	job, err := h.jobService.ManualRetryJob(r.Context(), jobID)
+	if err != nil {
+		if errors.Is(err, domain.ErrJobNotFound) {
+			respondError(w, http.StatusNotFound, "NOT_FOUND", "job not found")
+			return
+		}
+		if errors.Is(err, domain.ErrInvalidStateTransition) {
+			respondError(w, http.StatusConflict, "CONFLICT", err.Error())
+			return
+		}
+		respondError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to retry job: "+err.Error())
+		return
+	}
+
+	respondJSON(w, http.StatusOK, job)
+}
+
+// GetQueueStats handles GET /api/v1/queues/{name}/stats.
+func (h *JobHandler) GetQueueStats(w http.ResponseWriter, r *http.Request) {
+	queueName := chi.URLParam(r, "name")
+	if strings.TrimSpace(queueName) == "" {
+		respondError(w, http.StatusBadRequest, "INVALID_QUEUE", "queue name cannot be empty")
+		return
+	}
+
+	stats, err := h.jobService.GetQueueStats(r.Context(), queueName)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to query queue stats: "+err.Error())
+		return
+	}
+
+	respondJSON(w, http.StatusOK, stats)
+}
+
 func respondError(w http.ResponseWriter, statusCode int, code, message string) {
 	respondJSON(w, statusCode, APIError{
 		Error: ErrorDetail{

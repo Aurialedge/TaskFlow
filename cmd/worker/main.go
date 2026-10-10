@@ -66,6 +66,12 @@ func main() {
 		workerID,
 	)
 
+	sweeper := worker.NewSweeper(
+		jobRepo,
+		10*time.Second,
+		cfg.Worker.LeaseDuration,
+	)
+
 	// Run dispatcher loop in background
 	dispatcherDone := make(chan struct{})
 	go func() {
@@ -73,15 +79,24 @@ func main() {
 		dispatcher.Start(ctx)
 	}()
 
-	logger.Info("worker engine active and polling for jobs")
+	// Run sweeper loop in background
+	sweeperDone := make(chan struct{})
+	go func() {
+		defer close(sweeperDone)
+		sweeper.Start(ctx)
+	}()
+
+	logger.Info("worker engine active: polling and lease sweeper operational")
 
 	// Wait for termination signal
 	<-ctx.Done()
-	logger.Info("worker received shutdown signal; stopping dispatcher and draining pool")
+	logger.Info("worker received shutdown signal; stopping dispatcher, sweeper, and draining pool")
 
-	// Stop dispatcher first so no new jobs are claimed
+	// Stop dispatcher and sweeper first
 	dispatcher.Stop()
+	sweeper.Stop()
 	<-dispatcherDone
+	<-sweeperDone
 
 	// Gracefully drain pool
 	if err := shutdown.Drain(cfg.ShutdownTimeout, func(drainCtx context.Context) error {

@@ -88,6 +88,67 @@ func (m *mockJobRepo) RecordAttempt(ctx context.Context, attempt *domain.JobAtte
 	return nil
 }
 
+func (m *mockJobRepo) RecordOutcome(ctx context.Context, jobID uuid.UUID, leaseToken uuid.UUID, result []byte, execErr error, backoff time.Duration, isPermanent bool) (domain.State, error) {
+	return domain.StateSucceeded, nil
+}
+
+func (m *mockJobRepo) RenewLease(ctx context.Context, jobID uuid.UUID, leaseToken uuid.UUID, duration time.Duration) error {
+	return nil
+}
+
+func (m *mockJobRepo) RecoverAbandonedJobs(ctx context.Context, defaultLeaseDuration time.Duration) (int64, error) {
+	return 0, nil
+}
+
+func (m *mockJobRepo) CancelJob(ctx context.Context, jobID uuid.UUID) (*domain.Job, error) {
+	job, ok := m.createdJobs[jobID]
+	if !ok {
+		return nil, domain.ErrJobNotFound
+	}
+	if job.State == domain.StateSucceeded || job.State == domain.StateCancelled {
+		return nil, domain.ErrInvalidStateTransition
+	}
+	job.State = domain.StateCancelled
+	return job, nil
+}
+
+func (m *mockJobRepo) ManualRetryJob(ctx context.Context, jobID uuid.UUID) (*domain.Job, error) {
+	job, ok := m.createdJobs[jobID]
+	if !ok {
+		return nil, domain.ErrJobNotFound
+	}
+	if job.State != domain.StateFailed && job.State != domain.StateDead {
+		return nil, domain.ErrInvalidStateTransition
+	}
+	job.State = domain.StatePending
+	job.AttemptCount = 0
+	return job, nil
+}
+
+func (m *mockJobRepo) QueueStats(ctx context.Context, queue string) (*domain.QueueStats, error) {
+	stats := &domain.QueueStats{Queue: queue}
+	for _, j := range m.createdJobs {
+		if j.Queue == queue {
+			stats.Total++
+			switch j.State {
+			case domain.StatePending:
+				stats.Pending++
+			case domain.StateRunning:
+				stats.Running++
+			case domain.StateSucceeded:
+				stats.Succeeded++
+			case domain.StateFailed:
+				stats.Failed++
+			case domain.StateDead:
+				stats.Dead++
+			case domain.StateCancelled:
+				stats.Cancelled++
+			}
+		}
+	}
+	return stats, nil
+}
+
 func TestJobService_SubmitJob(t *testing.T) {
 	ctx := context.Background()
 
@@ -247,5 +308,64 @@ func TestJobService_ListJobs(t *testing.T) {
 	}
 	if jobs[0].Queue != "emails" {
 		t.Errorf("expected queue emails, got %s", jobs[0].Queue)
+	}
+}
+
+func TestJobService_CancelJob(t *testing.T) {
+	repo := newMockJobRepo()
+	svc := NewJobService(repo)
+	ctx := context.Background()
+
+	job, _, _ := svc.SubmitJob(ctx, domain.CreateJobInput{Type: "echo"})
+
+	cancelled, err := svc.CancelJob(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("unexpected cancel error: %v", err)
+	}
+	if cancelled.State != domain.StateCancelled {
+		t.Errorf("expected cancelled state, got %s", cancelled.State)
+	}
+
+	// Double cancel returns error
+	_, err = svc.CancelJob(ctx, job.ID)
+	if !errors.Is(err, domain.ErrInvalidStateTransition) {
+		t.Errorf("expected ErrInvalidStateTransition on already cancelled job, got %v", err)
+	}
+}
+
+func TestJobService_ManualRetryJob(t *testing.T) {
+	repo := newMockJobRepo()
+	svc := NewJobService(repo)
+	ctx := context.Background()
+
+	job, _, _ := svc.SubmitJob(ctx, domain.CreateJobInput{Type: "echo"})
+	repo.createdJobs[job.ID].State = domain.StateDead
+
+	retried, err := svc.ManualRetryJob(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("unexpected retry error: %v", err)
+	}
+	if retried.State != domain.StatePending {
+		t.Errorf("expected pending state after retry, got %s", retried.State)
+	}
+}
+
+func TestJobService_GetQueueStats(t *testing.T) {
+	repo := newMockJobRepo()
+	svc := NewJobService(repo)
+	ctx := context.Background()
+
+	_, _, _ = svc.SubmitJob(ctx, domain.CreateJobInput{Type: "echo", Queue: "notifications"})
+	_, _, _ = svc.SubmitJob(ctx, domain.CreateJobInput{Type: "echo", Queue: "notifications"})
+
+	stats, err := svc.GetQueueStats(ctx, "notifications")
+	if err != nil {
+		t.Fatalf("unexpected stats error: %v", err)
+	}
+	if stats.Total != 2 {
+		t.Errorf("expected total 2, got %d", stats.Total)
+	}
+	if stats.Pending != 2 {
+		t.Errorf("expected pending 2, got %d", stats.Pending)
 	}
 }

@@ -390,6 +390,298 @@ func (r *JobRepository) RecordAttempt(ctx context.Context, attempt *domain.JobAt
 	return nil
 }
 
+// RecordOutcome durably records success or failure with retry backoff and dead-lettering.
+func (r *JobRepository) RecordOutcome(
+	ctx context.Context,
+	jobID uuid.UUID,
+	leaseToken uuid.UUID,
+	result []byte,
+	execErr error,
+	backoff time.Duration,
+	isPermanent bool,
+) (domain.State, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return "", fmt.Errorf("failed to begin transaction for outcome: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var attemptCount, maxAttempts int
+	checkQuery := `
+		SELECT attempt_count, max_attempts
+		FROM jobs
+		WHERE id = $1 AND lease_token = $2
+		FOR UPDATE;
+	`
+	if err := tx.QueryRow(ctx, checkQuery, jobID, leaseToken).Scan(&attemptCount, &maxAttempts); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", fmt.Errorf("job outcome not recorded: lease token mismatch or job no longer active")
+		}
+		return "", fmt.Errorf("failed to query job for outcome: %w", err)
+	}
+
+	now := time.Now().UTC()
+
+	if execErr == nil {
+		updateQuery := `
+			UPDATE jobs
+			SET state = 'succeeded',
+			    result = $3,
+			    last_error = NULL,
+			    lease_token = NULL,
+			    lease_expires_at = NULL,
+			    updated_at = $4
+			WHERE id = $1 AND lease_token = $2;
+		`
+		if _, err := tx.Exec(ctx, updateQuery, jobID, leaseToken, result, now); err != nil {
+			return "", fmt.Errorf("failed to update succeeded job: %w", err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return "", fmt.Errorf("failed to commit success outcome: %w", err)
+		}
+		return domain.StateSucceeded, nil
+	}
+
+	errMsg := execErr.Error()
+	var finalState domain.State
+	if !isPermanent && attemptCount < maxAttempts {
+		// Retry eligible
+		finalState = domain.StateScheduled
+		runAt := now.Add(backoff)
+		updateQuery := `
+			UPDATE jobs
+			SET state = $3,
+			    run_at = $4,
+			    last_error = $5,
+			    lease_token = NULL,
+			    lease_expires_at = NULL,
+			    updated_at = $6
+			WHERE id = $1 AND lease_token = $2;
+		`
+		if _, err := tx.Exec(ctx, updateQuery, jobID, leaseToken, string(finalState), runAt, errMsg, now); err != nil {
+			return "", fmt.Errorf("failed to reschedule job for retry: %w", err)
+		}
+	} else {
+		// Dead-lettered: maximum attempts reached or error classified as permanent
+		finalState = domain.StateDead
+		updateQuery := `
+			UPDATE jobs
+			SET state = 'dead',
+			    last_error = $3,
+			    lease_token = NULL,
+			    lease_expires_at = NULL,
+			    updated_at = $4
+			WHERE id = $1 AND lease_token = $2;
+		`
+		if _, err := tx.Exec(ctx, updateQuery, jobID, leaseToken, errMsg, now); err != nil {
+			return "", fmt.Errorf("failed to dead-letter job: %w", err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return "", fmt.Errorf("failed to commit failure outcome: %w", err)
+	}
+
+	return finalState, nil
+}
+
+// RenewLease extends the expiration time of a running job's lease.
+func (r *JobRepository) RenewLease(ctx context.Context, jobID uuid.UUID, leaseToken uuid.UUID, duration time.Duration) error {
+	now := time.Now().UTC()
+	newExpiresAt := now.Add(duration)
+
+	query := `
+		UPDATE jobs
+		SET lease_expires_at = $3,
+		    updated_at = $4
+		WHERE id = $1 AND lease_token = $2 AND state = 'running';
+	`
+	res, err := r.pool.Exec(ctx, query, jobID, leaseToken, newExpiresAt, now)
+	if err != nil {
+		return fmt.Errorf("failed to renew lease: %w", err)
+	}
+	if res.RowsAffected() == 0 {
+		return fmt.Errorf("lease renewal failed: token expired or mismatched")
+	}
+	return nil
+}
+
+// RecoverAbandonedJobs finds jobs stuck in running with expired leases and re-queues or dead-letters them.
+func (r *JobRepository) RecoverAbandonedJobs(ctx context.Context, defaultLeaseDuration time.Duration) (int64, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("failed to begin tx for recovery: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	query := `
+		SELECT id, attempt_count, max_attempts
+		FROM jobs
+		WHERE state = 'running' AND lease_expires_at <= NOW()
+		FOR UPDATE SKIP LOCKED;
+	`
+	rows, err := tx.Query(ctx, query)
+	if err != nil {
+		return 0, fmt.Errorf("failed to query expired jobs: %w", err)
+	}
+
+	type expiredJob struct {
+		id           uuid.UUID
+		attemptCount int
+		maxAttempts  int
+	}
+	var expiredList []expiredJob
+
+	for rows.Next() {
+		var ej expiredJob
+		if err := rows.Scan(&ej.id, &ej.attemptCount, &ej.maxAttempts); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("failed to scan expired job: %w", err)
+		}
+		expiredList = append(expiredList, ej)
+	}
+	rows.Close()
+
+	if len(expiredList) == 0 {
+		return 0, nil
+	}
+
+	now := time.Now().UTC()
+	for _, ej := range expiredList {
+		if ej.attemptCount < ej.maxAttempts {
+			requeueQuery := `
+				UPDATE jobs
+				SET state = 'pending',
+				    lease_token = NULL,
+				    lease_expires_at = NULL,
+				    last_error = 'recovered from expired worker lease',
+				    updated_at = $2
+				WHERE id = $1;
+			`
+			if _, err := tx.Exec(ctx, requeueQuery, ej.id, now); err != nil {
+				return 0, fmt.Errorf("failed to requeue abandoned job %s: %w", ej.id, err)
+			}
+		} else {
+			deadQuery := `
+				UPDATE jobs
+				SET state = 'dead',
+				    lease_token = NULL,
+				    lease_expires_at = NULL,
+				    last_error = 'lease expired and maximum attempts reached',
+				    updated_at = $2
+				WHERE id = $1;
+			`
+			if _, err := tx.Exec(ctx, deadQuery, ej.id, now); err != nil {
+				return 0, fmt.Errorf("failed to dead-letter abandoned job %s: %w", ej.id, err)
+			}
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("failed to commit recovery: %w", err)
+	}
+
+	return int64(len(expiredList)), nil
+}
+
+// CancelJob cancels a pending or scheduled job, or marks a running job as cancelled.
+func (r *JobRepository) CancelJob(ctx context.Context, jobID uuid.UUID) (*domain.Job, error) {
+	now := time.Now().UTC()
+	query := `
+		UPDATE jobs
+		SET state = 'cancelled',
+		    lease_token = NULL,
+		    lease_expires_at = NULL,
+		    updated_at = $2
+		WHERE id = $1 AND state IN ('pending', 'scheduled', 'running')
+		RETURNING id, queue, type, payload, state, priority, max_attempts, attempt_count,
+		          run_at, timeout_seconds, lease_token, lease_expires_at, lease_generation,
+		          idempotency_key, idempotency_scope, result, last_error, created_at, updated_at;
+	`
+	row := r.pool.QueryRow(ctx, query, jobID, now)
+	job, err := scanJob(row)
+	if err == nil {
+		return job, nil
+	}
+
+	if errors.Is(err, pgx.ErrNoRows) {
+		// Check if job exists in terminal state
+		existing, checkErr := r.GetJobByID(ctx, jobID)
+		if checkErr != nil {
+			return nil, checkErr
+		}
+		return nil, fmt.Errorf("%w: job is already in terminal state '%s'", domain.ErrInvalidStateTransition, existing.State)
+	}
+
+	return nil, fmt.Errorf("failed to cancel job: %w", err)
+}
+
+// ManualRetryJob re-arms a terminal failed or dead job back into pending state.
+func (r *JobRepository) ManualRetryJob(ctx context.Context, jobID uuid.UUID) (*domain.Job, error) {
+	now := time.Now().UTC()
+	query := `
+		UPDATE jobs
+		SET state = 'pending',
+		    attempt_count = 0,
+		    run_at = $2,
+		    last_error = NULL,
+		    lease_token = NULL,
+		    lease_expires_at = NULL,
+		    updated_at = $2
+		WHERE id = $1 AND state IN ('failed', 'dead')
+		RETURNING id, queue, type, payload, state, priority, max_attempts, attempt_count,
+		          run_at, timeout_seconds, lease_token, lease_expires_at, lease_generation,
+		          idempotency_key, idempotency_scope, result, last_error, created_at, updated_at;
+	`
+	row := r.pool.QueryRow(ctx, query, jobID, now)
+	job, err := scanJob(row)
+	if err == nil {
+		return job, nil
+	}
+
+	if errors.Is(err, pgx.ErrNoRows) {
+		existing, checkErr := r.GetJobByID(ctx, jobID)
+		if checkErr != nil {
+			return nil, checkErr
+		}
+		return nil, fmt.Errorf("%w: cannot retry job in state '%s'", domain.ErrInvalidStateTransition, existing.State)
+	}
+
+	return nil, fmt.Errorf("failed to manually retry job: %w", err)
+}
+
+// QueueStats calculates depth and status counts for a queue.
+func (r *JobRepository) QueueStats(ctx context.Context, queue string) (*domain.QueueStats, error) {
+	query := `
+		SELECT
+			COALESCE(COUNT(*) FILTER (WHERE state = 'pending'), 0) AS pending,
+			COALESCE(COUNT(*) FILTER (WHERE state = 'scheduled'), 0) AS scheduled,
+			COALESCE(COUNT(*) FILTER (WHERE state = 'running'), 0) AS running,
+			COALESCE(COUNT(*) FILTER (WHERE state = 'succeeded'), 0) AS succeeded,
+			COALESCE(COUNT(*) FILTER (WHERE state = 'failed'), 0) AS failed,
+			COALESCE(COUNT(*) FILTER (WHERE state = 'dead'), 0) AS dead,
+			COALESCE(COUNT(*) FILTER (WHERE state = 'cancelled'), 0) AS cancelled,
+			COUNT(*) AS total
+		FROM jobs
+		WHERE queue = $1;
+	`
+	stats := &domain.QueueStats{Queue: queue}
+	err := r.pool.QueryRow(ctx, query, strings.TrimSpace(queue)).Scan(
+		&stats.Pending,
+		&stats.Scheduled,
+		&stats.Running,
+		&stats.Succeeded,
+		&stats.Failed,
+		&stats.Dead,
+		&stats.Cancelled,
+		&stats.Total,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query queue stats: %w", err)
+	}
+	return stats, nil
+}
+
 type rowScanner interface {
 	Scan(dest ...interface{}) error
 }
