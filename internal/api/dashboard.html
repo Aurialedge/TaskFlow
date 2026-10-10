@@ -1,0 +1,915 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TaskFlow — Distributed Job Queue Console</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #090d16;
+      --card-bg: rgba(18, 26, 43, 0.75);
+      --card-border: rgba(255, 255, 255, 0.08);
+      --accent-cyan: #06b6d4;
+      --accent-blue: #3b82f6;
+      --accent-green: #10b981;
+      --accent-amber: #f59e0b;
+      --accent-rose: #ef4444;
+      --accent-purple: #8b5cf6;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background-color: var(--bg);
+      background-image: 
+        radial-gradient(circle at 10% 10%, rgba(59, 130, 246, 0.12) 0%, transparent 40%),
+        radial-gradient(circle at 90% 90%, rgba(139, 92, 246, 0.12) 0%, transparent 40%);
+      color: var(--text);
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      padding: 1.5rem;
+    }
+
+    .container {
+      max-width: 1240px;
+      width: 100%;
+      margin: 0 auto;
+    }
+
+    /* Top Navigation Bar */
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 1rem;
+      padding-bottom: 1.5rem;
+      border-bottom: 1px solid var(--card-border);
+      margin-bottom: 1.75rem;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    .logo-icon {
+      width: 40px;
+      height: 40px;
+      background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      font-size: 1.25rem;
+      color: white;
+      box-shadow: 0 0 20px rgba(59, 130, 246, 0.4);
+    }
+
+    .brand-title {
+      font-size: 1.5rem;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      background: linear-gradient(135deg, #fff 50%, #94a3b8);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .brand-tag {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    /* Buttons */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-family: inherit;
+      font-weight: 600;
+      font-size: 0.88rem;
+      padding: 0.55rem 1.1rem;
+      border-radius: 8px;
+      border: 1px solid transparent;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      text-decoration: none;
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+      color: #fff;
+      box-shadow: 0 4px 14px rgba(59, 130, 246, 0.3);
+    }
+    .btn-primary:hover {
+      box-shadow: 0 6px 20px rgba(59, 130, 246, 0.5);
+      transform: translateY(-1px);
+    }
+
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--text);
+      border-color: var(--card-border);
+    }
+    .btn-secondary:hover {
+      background: rgba(255, 255, 255, 0.1);
+    }
+
+    .btn-success {
+      background: rgba(16, 185, 129, 0.15);
+      color: var(--accent-green);
+      border-color: rgba(16, 185, 129, 0.3);
+    }
+    .btn-success:hover {
+      background: rgba(16, 185, 129, 0.25);
+    }
+
+    .btn-sm {
+      padding: 0.3rem 0.65rem;
+      font-size: 0.78rem;
+    }
+
+    /* Live Badge */
+    .live-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      background: rgba(16, 185, 129, 0.1);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+      color: #34d399;
+      padding: 0.35rem 0.75rem;
+      border-radius: 9999px;
+      font-size: 0.8rem;
+      font-weight: 600;
+    }
+    .dot {
+      width: 7px;
+      height: 7px;
+      background: var(--accent-green);
+      border-radius: 50%;
+      box-shadow: 0 0 8px var(--accent-green);
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.3; transform: scale(0.85); }
+    }
+
+    /* Metrics Grid */
+    .metrics-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+      gap: 1rem;
+      margin-bottom: 2rem;
+    }
+
+    .metric-card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      backdrop-filter: blur(12px);
+      border-radius: 12px;
+      padding: 1.15rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.4rem;
+      transition: transform 0.2s ease, border-color 0.2s ease;
+    }
+    .metric-card:hover {
+      transform: translateY(-2px);
+      border-color: rgba(255, 255, 255, 0.15);
+    }
+
+    .metric-label {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .metric-value {
+      font-size: 1.85rem;
+      font-weight: 800;
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--text);
+    }
+
+    .val-pending { color: var(--accent-amber); }
+    .val-running { color: var(--accent-cyan); }
+    .val-succeeded { color: var(--accent-green); }
+    .val-failed { color: var(--accent-rose); }
+    .val-dead { color: #f43f5e; }
+
+    /* Controls Bar */
+    .controls-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 1rem;
+      margin-bottom: 1rem;
+    }
+
+    .filter-tabs {
+      display: flex;
+      background: rgba(255, 255, 255, 0.04);
+      padding: 0.25rem;
+      border-radius: 8px;
+      border: 1px solid var(--card-border);
+    }
+
+    .tab-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      padding: 0.4rem 0.85rem;
+      border-radius: 6px;
+      font-size: 0.82rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .tab-btn.active {
+      background: rgba(255, 255, 255, 0.1);
+      color: var(--text);
+    }
+
+    /* Jobs Table */
+    .table-card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      backdrop-filter: blur(12px);
+      border-radius: 14px;
+      overflow: hidden;
+      margin-bottom: 2rem;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      text-align: left;
+    }
+
+    th {
+      background: rgba(255, 255, 255, 0.02);
+      color: var(--text-muted);
+      font-size: 0.78rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      padding: 0.85rem 1rem;
+      border-bottom: 1px solid var(--card-border);
+    }
+
+    td {
+      padding: 0.95rem 1rem;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+      font-size: 0.86rem;
+    }
+
+    tr:hover td {
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    .job-id {
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--accent-cyan);
+      font-size: 0.82rem;
+      font-weight: 600;
+    }
+
+    .type-pill {
+      display: inline-block;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid var(--card-border);
+      padding: 0.2rem 0.55rem;
+      border-radius: 4px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.78rem;
+    }
+
+    /* Status Badges */
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      padding: 0.25rem 0.65rem;
+      border-radius: 9999px;
+      font-size: 0.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+    .badge-pending { background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3); }
+    .badge-running { background: rgba(6, 182, 212, 0.15); color: #22d3ee; border: 1px solid rgba(6, 182, 212, 0.3); }
+    .badge-succeeded { background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); }
+    .badge-failed { background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
+    .badge-dead { background: rgba(244, 63, 94, 0.15); color: #fb7185; border: 1px solid rgba(244, 63, 94, 0.3); }
+    .badge-cancelled { background: rgba(148, 163, 184, 0.15); color: #94a3b8; border: 1px solid rgba(148, 163, 184, 0.3); }
+
+    .empty-state {
+      padding: 3.5rem 1rem;
+      text-align: center;
+      color: var(--text-muted);
+    }
+
+    /* Modal */
+    .modal-backdrop {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0, 0, 0, 0.75);
+      backdrop-filter: blur(8px);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+      padding: 1rem;
+    }
+    .modal-backdrop.open { display: flex; }
+
+    .modal {
+      background: #0d1322;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 16px;
+      max-width: 600px;
+      width: 100%;
+      max-height: 90vh;
+      overflow-y: auto;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7);
+      padding: 1.75rem;
+    }
+
+    .modal-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 1.25rem;
+      padding-bottom: 0.75rem;
+      border-bottom: 1px solid var(--card-border);
+    }
+    .modal-title { font-size: 1.25rem; font-weight: 700; }
+    .close-btn { background: transparent; border: none; color: var(--text-muted); font-size: 1.5rem; cursor: pointer; }
+
+    .form-group {
+      margin-bottom: 1.1rem;
+    }
+    .form-label {
+      display: block;
+      font-size: 0.82rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      margin-bottom: 0.4rem;
+    }
+    .form-input, .form-textarea {
+      width: 100%;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      padding: 0.6rem 0.85rem;
+      color: var(--text);
+      font-family: inherit;
+      font-size: 0.9rem;
+    }
+    .form-input:focus, .form-textarea:focus {
+      outline: none;
+      border-color: var(--accent-blue);
+      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
+    }
+    .form-textarea {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.82rem;
+      min-height: 90px;
+      resize: vertical;
+    }
+
+    /* Preset Buttons */
+    .presets-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.4rem;
+      margin-bottom: 1rem;
+    }
+    .preset-chip {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--card-border);
+      padding: 0.3rem 0.65rem;
+      border-radius: 6px;
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: #cbd5e1;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .preset-chip:hover {
+      background: rgba(59, 130, 246, 0.2);
+      border-color: var(--accent-blue);
+      color: white;
+    }
+
+    /* Toast */
+    .toast {
+      position: fixed;
+      bottom: 1.5rem;
+      right: 1.5rem;
+      background: #1e293b;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      color: #fff;
+      padding: 0.75rem 1.25rem;
+      border-radius: 8px;
+      font-size: 0.88rem;
+      font-weight: 500;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.4);
+      transform: translateY(100px);
+      opacity: 0;
+      transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+      z-index: 2000;
+    }
+    .toast.show {
+      transform: translateY(0);
+      opacity: 1;
+    }
+    .toast.success { border-left: 4px solid var(--accent-green); }
+    .toast.error { border-left: 4px solid var(--accent-rose); }
+
+    /* Timeline in Inspect Modal */
+    .timeline {
+      margin-top: 1rem;
+      border-left: 2px solid rgba(255, 255, 255, 0.1);
+      padding-left: 1.25rem;
+    }
+    .timeline-item {
+      position: relative;
+      margin-bottom: 1rem;
+    }
+    .timeline-item::before {
+      content: '';
+      position: absolute;
+      left: -1.65rem;
+      top: 0.25rem;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--accent-blue);
+    }
+    .timeline-title { font-size: 0.88rem; font-weight: 700; margin-bottom: 0.2rem; }
+    .timeline-meta { font-size: 0.78rem; color: var(--text-muted); font-family: 'JetBrains Mono', monospace; }
+
+    footer {
+      margin-top: auto;
+      text-align: center;
+      padding-top: 1.5rem;
+      font-size: 0.82rem;
+      color: var(--text-muted);
+      border-top: 1px solid var(--card-border);
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="brand">
+        <div class="logo-icon">TF</div>
+        <div>
+          <h1 class="brand-title">TaskFlow</h1>
+          <div class="brand-tag">Distributed Background Job Queue</div>
+        </div>
+      </div>
+
+      <div class="header-actions">
+        <div class="live-badge">
+          <span class="dot"></span>
+          <span>Engine Active</span>
+        </div>
+        <button class="btn btn-secondary btn-sm" id="refreshBtn" onclick="fetchDashboardData()">
+          🔄 Refresh
+        </button>
+        <button class="btn btn-success btn-sm" id="batchBtn" onclick="dispatchBatchJobs(5)">
+          ⚡ Dispatch Batch (5x)
+        </button>
+        <button class="btn btn-primary" id="openSubmitModalBtn" onclick="openSubmitModal()">
+          + Submit Job
+        </button>
+      </div>
+    </header>
+
+    <!-- Metrics Strip -->
+    <div class="metrics-grid">
+      <div class="metric-card">
+        <span class="metric-label">Total Jobs</span>
+        <span class="metric-value" id="statTotal">0</span>
+      </div>
+      <div class="metric-card">
+        <span class="metric-label">Pending</span>
+        <span class="metric-value val-pending" id="statPending">0</span>
+      </div>
+      <div class="metric-card">
+        <span class="metric-label">Running</span>
+        <span class="metric-value val-running" id="statRunning">0</span>
+      </div>
+      <div class="metric-card">
+        <span class="metric-label">Succeeded</span>
+        <span class="metric-value val-succeeded" id="statSucceeded">0</span>
+      </div>
+      <div class="metric-card">
+        <span class="metric-label">Failed / Dead</span>
+        <span class="metric-value val-failed" id="statFailed">0</span>
+      </div>
+    </div>
+
+    <!-- Table Controls -->
+    <div class="controls-bar">
+      <div class="filter-tabs">
+        <button class="tab-btn active" onclick="setFilter('all', this)">All</button>
+        <button class="tab-btn" onclick="setFilter('pending', this)">Pending</button>
+        <button class="tab-btn" onclick="setFilter('running', this)">Running</button>
+        <button class="tab-btn" onclick="setFilter('succeeded', this)">Succeeded</button>
+        <button class="tab-btn" onclick="setFilter('failed', this)">Failed</button>
+        <button class="tab-btn" onclick="setFilter('dead', this)">Dead</button>
+      </div>
+
+      <div style="font-size: 0.85rem; color: var(--text-muted);">
+        Auto-refresh: <strong id="refreshStatus" style="color: var(--accent-green);">ON (2.5s)</strong>
+      </div>
+    </div>
+
+    <!-- Jobs Table -->
+    <div class="table-card">
+      <table>
+        <thead>
+          <tr>
+            <th>Job ID</th>
+            <th>Type</th>
+            <th>Queue</th>
+            <th>Priority</th>
+            <th>Status</th>
+            <th>Attempts</th>
+            <th>Created</th>
+            <th style="text-align: right;">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="jobsTableBody">
+          <tr>
+            <td colspan="8" class="empty-state">Loading background jobs...</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <footer>
+      TaskFlow Engine &bull; Go 1.24 &bull; PostgreSQL SKIP LOCKED &bull; Monotonic Fencing Tokens &bull; Prometheus Telemetry
+    </footer>
+  </div>
+
+  <!-- Submit Job Modal -->
+  <div class="modal-backdrop" id="submitModal">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 class="modal-title">Submit New Background Job</h3>
+        <button class="close-btn" onclick="closeSubmitModal()">&times;</button>
+      </div>
+
+      <div class="presets-row">
+        <span style="font-size: 0.8rem; color: var(--text-muted); align-self: center;">Presets:</span>
+        <span class="preset-chip" onclick="applyPreset('report.generate')">📊 Financial Report</span>
+        <span class="preset-chip" onclick="applyPreset('echo')">💬 Echo Message</span>
+        <span class="preset-chip" onclick="applyPreset('sleep')">⏱️ Sleep (2s)</span>
+        <span class="preset-chip" onclick="applyPreset('test.fail')">💥 Fail & Retry</span>
+      </div>
+
+      <form id="jobForm" onsubmit="handleFormSubmit(event)">
+        <div class="form-group">
+          <label class="form-label">Job Type</label>
+          <input class="form-input" id="jobType" required value="report.generate" placeholder="e.g. report.generate, echo, sleep">
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;">
+          <div class="form-group">
+            <label class="form-label">Queue</label>
+            <input class="form-input" id="jobQueue" value="default">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Priority (Higher = First)</label>
+            <input class="form-input" type="number" id="jobPriority" value="10" min="0" max="100">
+          </div>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;">
+          <div class="form-group">
+            <label class="form-label">Max Attempts</label>
+            <input class="form-input" type="number" id="jobMaxAttempts" value="3" min="1" max="10">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Idempotency Key (Optional)</label>
+            <input class="form-input" id="jobIdempotency" placeholder="e.g. req-xyz-101">
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Payload (JSON)</label>
+          <textarea class="form-textarea" id="jobPayload" required>{
+  "report_id": "rep-901",
+  "format": "pdf",
+  "recipient": "cto@company.com"
+}</textarea>
+        </div>
+
+        <div style="display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 1.5rem;">
+          <button type="button" class="btn btn-secondary" onclick="closeSubmitModal()">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="submitBtn">Dispatch Job</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Inspect Job Modal -->
+  <div class="modal-backdrop" id="inspectModal">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 class="modal-title">Job Execution Details</h3>
+        <button class="close-btn" onclick="closeInspectModal()">&times;</button>
+      </div>
+      <div id="inspectContent">Loading...</div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    let allJobs = [];
+    let currentFilter = 'all';
+    let autoRefresh = true;
+
+    async function fetchDashboardData() {
+      try {
+        const statsRes = await fetch('/api/v1/queues/default/stats');
+        if (statsRes.ok) {
+          const stats = await statsRes.json();
+          document.getElementById('statTotal').innerText = stats.total_count || 0;
+          document.getElementById('statPending').innerText = stats.pending_count || 0;
+          document.getElementById('statRunning').innerText = stats.running_count || 0;
+          document.getElementById('statSucceeded').innerText = stats.succeeded_count || 0;
+          document.getElementById('statFailed').innerText = (stats.failed_count || 0) + (stats.dead_count || 0);
+        }
+
+        const jobsRes = await fetch('/api/v1/jobs?limit=50');
+        if (jobsRes.ok) {
+          const jobsData = await jobsRes.json();
+          allJobs = jobsData.data || [];
+          renderJobsTable();
+        }
+      } catch (err) {
+        console.error('Failed to load dashboard data:', err);
+      }
+    }
+
+    function renderJobsTable() {
+      const tbody = document.getElementById('jobsTableBody');
+      const filtered = currentFilter === 'all' 
+        ? allJobs 
+        : allJobs.filter(j => j.state === currentFilter);
+
+      if (filtered.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="8" class="empty-state">No jobs found matching criteria. Click "+ Submit Job" above to create one!</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = filtered.map(job => {
+        const shortID = job.id.substring(0, 8) + '...';
+        const dateStr = new Date(job.created_at).toLocaleTimeString();
+        return `
+          <tr>
+            <td><span class="job-id" title="${job.id}">${shortID}</span></td>
+            <td><span class="type-pill">${escapeHTML(job.type)}</span></td>
+            <td>${escapeHTML(job.queue)}</td>
+            <td><span style="font-weight: 700; color: var(--accent-cyan);">P${job.priority}</span></td>
+            <td><span class="badge badge-${job.state}">${job.state}</span></td>
+            <td>${job.attempt_count} / ${job.max_attempts}</td>
+            <td><span style="color: var(--text-muted); font-size: 0.8rem;">${dateStr}</span></td>
+            <td style="text-align: right;">
+              <button class="btn btn-secondary btn-sm" onclick="inspectJob('${job.id}')">Inspect</button>
+              ${job.state === 'pending' ? `<button class="btn btn-secondary btn-sm" style="color: var(--accent-rose);" onclick="cancelJob('${job.id}')">Cancel</button>` : ''}
+              ${(job.state === 'failed' || job.state === 'dead') ? `<button class="btn btn-secondary btn-sm" style="color: var(--accent-green);" onclick="retryJob('${job.id}')">Retry</button>` : ''}
+            </td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    function setFilter(filter, el) {
+      currentFilter = filter;
+      document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+      el.classList.add('active');
+      renderJobsTable();
+    }
+
+    function openSubmitModal() {
+      document.getElementById('submitModal').classList.add('open');
+    }
+    function closeSubmitModal() {
+      document.getElementById('submitModal').classList.remove('open');
+    }
+    function closeInspectModal() {
+      document.getElementById('inspectModal').classList.remove('open');
+    }
+
+    function applyPreset(type) {
+      document.getElementById('jobType').value = type;
+      if (type === 'report.generate') {
+        document.getElementById('jobPayload').value = JSON.stringify({ report_id: "rep-" + Math.floor(Math.random() * 900 + 100), format: "pdf" }, null, 2);
+      } else if (type === 'echo') {
+        document.getElementById('jobPayload').value = JSON.stringify({ message: "Hello from TaskFlow cluster!", timestamp: new Date().toISOString() }, null, 2);
+      } else if (type === 'sleep') {
+        document.getElementById('jobPayload').value = JSON.stringify({ duration_ms: 2000 }, null, 2);
+      } else if (type === 'test.fail') {
+        document.getElementById('jobPayload').value = JSON.stringify({ reason: "Simulated upstream service error" }, null, 2);
+      }
+    }
+
+    async function handleFormSubmit(e) {
+      e.preventDefault();
+      const submitBtn = document.getElementById('submitBtn');
+      submitBtn.disabled = true;
+      submitBtn.innerText = 'Submitting...';
+
+      try {
+        let payload = {};
+        try {
+          payload = JSON.parse(document.getElementById('jobPayload').value);
+        } catch {
+          showToast('Invalid JSON in payload', 'error');
+          return;
+        }
+
+        const body = {
+          type: document.getElementById('jobType').value.trim(),
+          queue: document.getElementById('jobQueue').value.trim() || 'default',
+          priority: parseInt(document.getElementById('jobPriority').value) || 0,
+          max_attempts: parseInt(document.getElementById('jobMaxAttempts').value) || 3,
+          payload: payload
+        };
+
+        const idempKey = document.getElementById('jobIdempotency').value.trim();
+        if (idempKey) body.idempotency_key = idempKey;
+
+        const res = await fetch('/api/v1/jobs', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+
+        if (res.ok) {
+          const created = await res.json();
+          showToast('Job created successfully: ' + created.id.substring(0, 8), 'success');
+          closeSubmitModal();
+          fetchDashboardData();
+        } else {
+          const errData = await res.json();
+          showToast(errData.error?.message || 'Submission failed', 'error');
+        }
+      } catch (err) {
+        showToast('Network error: ' + err.message, 'error');
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.innerText = 'Dispatch Job';
+      }
+    }
+
+    async function dispatchBatchJobs(count) {
+      showToast('Dispatching ' + count + ' concurrent jobs to worker pool...', 'success');
+      for (let i = 0; i < count; i++) {
+        fetch('/api/v1/jobs', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            queue: 'default',
+            type: i % 2 === 0 ? 'report.generate' : 'echo',
+            priority: Math.floor(Math.random() * 50) + 1,
+            max_attempts: 3,
+            payload: { batch_index: i + 1, time: new Date().toISOString() }
+          })
+        });
+      }
+      setTimeout(fetchDashboardData, 600);
+    }
+
+    async function inspectJob(jobID) {
+      document.getElementById('inspectModal').classList.add('open');
+      const container = document.getElementById('inspectContent');
+      container.innerHTML = '<p style="color: var(--text-muted);">Loading attempt history...</p>';
+
+      try {
+        const res = await fetch('/api/v1/jobs/' + jobID);
+        if (!res.ok) {
+          container.innerHTML = '<p style="color: var(--accent-rose);">Failed to load job details.</p>';
+          return;
+        }
+
+        const data = await res.json();
+        const job = data.job || data;
+        const attempts = data.attempts || [];
+
+        let attemptsHTML = attempts.length === 0 
+          ? '<p style="color: var(--text-muted); font-size: 0.85rem; margin-top: 0.5rem;">No attempts recorded yet (Job is waiting in queue).</p>'
+          : attempts.map(att => `
+              <div class="timeline-item">
+                <div class="timeline-title">Attempt #${att.attempt_number} &bull; <span class="badge badge-${att.state}">${att.state}</span></div>
+                <div class="timeline-meta">Worker: ${escapeHTML(att.worker_id || 'unknown')} &bull; Duration: ${att.duration_ms !== null ? att.duration_ms + 'ms' : 'running'}</div>
+                ${att.error_message ? `<div style="color: var(--accent-rose); font-size: 0.8rem; margin-top: 0.25rem;">Error: ${escapeHTML(att.error_message)}</div>` : ''}
+              </div>
+            `).join('');
+
+        container.innerHTML = `
+          <div style="margin-bottom: 1rem;">
+            <div style="font-size: 0.82rem; color: var(--text-muted);">Job ID</div>
+            <div style="font-family: 'JetBrains Mono', monospace; font-size: 0.95rem; color: var(--accent-cyan); word-break: break-all;">${job.id}</div>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin-bottom: 1rem; font-size: 0.85rem;">
+            <div><strong>Type:</strong> ${escapeHTML(job.type)}</div>
+            <div><strong>Queue:</strong> ${escapeHTML(job.queue)}</div>
+            <div><strong>Priority:</strong> P${job.priority}</div>
+            <div><strong>Status:</strong> <span class="badge badge-${job.state}">${job.state}</span></div>
+          </div>
+          <div style="margin-bottom: 1rem;">
+            <div style="font-size: 0.82rem; color: var(--text-muted); margin-bottom: 0.3rem;">Payload</div>
+            <pre style="background: rgba(0,0,0,0.5); padding: 0.75rem; border-radius: 8px; font-size: 0.8rem; overflow-x: auto; color: #a7f3d0;">${JSON.stringify(job.payload, null, 2)}</pre>
+          </div>
+          ${job.result ? `
+          <div style="margin-bottom: 1rem;">
+            <div style="font-size: 0.82rem; color: var(--text-muted); margin-bottom: 0.3rem;">Execution Result</div>
+            <pre style="background: rgba(0,0,0,0.5); padding: 0.75rem; border-radius: 8px; font-size: 0.8rem; overflow-x: auto; color: var(--accent-cyan);">${JSON.stringify(job.result, null, 2)}</pre>
+          </div>` : ''}
+          <h4 style="font-size: 0.9rem; margin-top: 1.25rem;">Execution Audit Trail (${attempts.length} attempts)</h4>
+          <div class="timeline">${attemptsHTML}</div>
+        `;
+      } catch (err) {
+        container.innerHTML = '<p style="color: var(--accent-rose);">Error loading job: ' + err.message + '</p>';
+      }
+    }
+
+    async function cancelJob(jobID) {
+      if (!confirm('Are you sure you want to cancel this job?')) return;
+      try {
+        const res = await fetch('/api/v1/jobs/' + jobID + '/cancel', { method: 'POST' });
+        if (res.ok) {
+          showToast('Job cancelled', 'success');
+          fetchDashboardData();
+        } else {
+          showToast('Failed to cancel job', 'error');
+        }
+      } catch (err) {
+        showToast('Error: ' + err.message, 'error');
+      }
+    }
+
+    async function retryJob(jobID) {
+      try {
+        const res = await fetch('/api/v1/jobs/' + jobID + '/retry', { method: 'POST' });
+        if (res.ok) {
+          showToast('Job re-queued for retry', 'success');
+          fetchDashboardData();
+        } else {
+          showToast('Failed to retry job', 'error');
+        }
+      } catch (err) {
+        showToast('Error: ' + err.message, 'error');
+      }
+    }
+
+    function showToast(msg, type = 'success') {
+      const toast = document.getElementById('toast');
+      toast.innerText = msg;
+      toast.className = 'toast ' + type + ' show';
+      setTimeout(() => toast.classList.remove('show'), 3500);
+    }
+
+    function escapeHTML(str) {
+      if (!str) return '';
+      return String(str).replace(/[&<>'"]/g, tag => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
+      }[tag] || tag));
+    }
+
+    // Polling cycle
+    fetchDashboardData();
+    setInterval(() => {
+      if (autoRefresh) fetchDashboardData();
+    }, 2500);
+  </script>
+</body>
+</html>
