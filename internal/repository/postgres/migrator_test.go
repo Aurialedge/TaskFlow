@@ -27,8 +27,8 @@ func TestParseMigrationFilename(t *testing.T) {
 			wantError:   false,
 		},
 		{
-			filename:    "invalid_name.sql",
-			wantError:   true,
+			filename:  "invalid_name.sql",
+			wantError: true,
 		},
 	}
 
