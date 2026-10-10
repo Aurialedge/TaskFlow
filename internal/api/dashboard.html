@@ -499,8 +499,8 @@
         <button class="btn btn-secondary btn-sm" id="refreshBtn" onclick="fetchDashboardData()">
           🔄 Refresh
         </button>
-        <button class="btn btn-success btn-sm" id="batchBtn" onclick="dispatchBatchJobs(5)">
-          ⚡ Dispatch Batch (5x)
+        <button class="btn btn-success btn-sm" id="batchBtn" onclick="dispatchBatchJobs(5)" title="Dispatches 5 diverse jobs: successes, running sleep, exponential backoff retries, and dead-letter">
+          ⚡ Dispatch Demo Batch (5x)
         </button>
         <button class="btn btn-primary" id="openSubmitModalBtn" onclick="openSubmitModal()">
           + Submit Job
@@ -543,8 +543,11 @@
         <button class="tab-btn" onclick="setFilter('dead', this)">Dead</button>
       </div>
 
-      <div style="font-size: 0.85rem; color: var(--text-muted);">
-        Auto-refresh: <strong id="refreshStatus" style="color: var(--accent-green);">ON (2.5s)</strong>
+      <div style="display: flex; align-items: center; gap: 0.75rem;">
+        <button class="btn btn-secondary btn-sm" style="color: var(--accent-rose);" onclick="clearFinishedJobs()">🗑️ Clear Finished</button>
+        <div style="font-size: 0.85rem; color: var(--text-muted);">
+          Auto-refresh: <strong id="refreshStatus" style="color: var(--accent-green);">ON (2.5s)</strong>
+        </div>
       </div>
     </div>
 
@@ -586,10 +589,10 @@
 
       <div class="presets-row">
         <span style="font-size: 0.8rem; color: var(--text-muted); align-self: center;">Presets:</span>
-        <span class="preset-chip" onclick="applyPreset('report.generate')">📊 Financial Report</span>
-        <span class="preset-chip" onclick="applyPreset('echo')">💬 Echo Message</span>
-        <span class="preset-chip" onclick="applyPreset('sleep')">⏱️ Sleep (2s)</span>
-        <span class="preset-chip" onclick="applyPreset('test.fail')">💥 Fail & Retry</span>
+        <span class="preset-chip" onclick="applyPreset('report.generate')">📊 Report (Succeeds)</span>
+        <span class="preset-chip" onclick="applyPreset('sleep')">⏱️ Sleep 3s (Watch Running)</span>
+        <span class="preset-chip" onclick="applyPreset('test.fail')">💥 Retry 3x (Watch Backoff)</span>
+        <span class="preset-chip" onclick="applyPreset('permanent.fail')">☠️ Dead-Letter (Watch Dead)</span>
       </div>
 
       <form id="jobForm" onsubmit="handleFormSubmit(event)">
@@ -657,22 +660,40 @@
 
     async function fetchDashboardData() {
       try {
-        const statsRes = await fetch('/api/v1/queues/default/stats');
-        if (statsRes.ok) {
-          const stats = await statsRes.json();
-          document.getElementById('statTotal').innerText = stats.total_count || 0;
-          document.getElementById('statPending').innerText = stats.pending_count || 0;
-          document.getElementById('statRunning').innerText = stats.running_count || 0;
-          document.getElementById('statSucceeded').innerText = stats.succeeded_count || 0;
-          document.getElementById('statFailed').innerText = (stats.failed_count || 0) + (stats.dead_count || 0);
+        let stats = null;
+        try {
+          const statsRes = await fetch('/api/v1/queues/all/stats');
+          if (statsRes.ok) {
+            stats = await statsRes.json();
+          }
+        } catch (e) {
+          console.warn('Stats fetch warning:', e);
         }
 
-        const jobsRes = await fetch('/api/v1/jobs?limit=50');
-        if (jobsRes.ok) {
-          const jobsData = await jobsRes.json();
-          allJobs = jobsData.data || [];
-          renderJobsTable();
+        let jobsData = null;
+        try {
+          const jobsRes = await fetch('/api/v1/jobs?limit=50');
+          if (jobsRes.ok) {
+            jobsData = await jobsRes.json();
+            allJobs = jobsData.data || [];
+            renderJobsTable();
+          }
+        } catch (e) {
+          console.warn('Jobs fetch warning:', e);
         }
+
+        // Accurately update metric cards
+        const totalCount = stats && stats.total !== undefined ? stats.total : (jobsData && jobsData.pagination && jobsData.pagination.total !== undefined ? jobsData.pagination.total : allJobs.length);
+        const pendingCount = stats && stats.pending !== undefined ? stats.pending : allJobs.filter(j => j.state === 'pending').length;
+        const runningCount = stats && stats.running !== undefined ? stats.running : allJobs.filter(j => j.state === 'running').length;
+        const succeededCount = stats && stats.succeeded !== undefined ? stats.succeeded : allJobs.filter(j => j.state === 'succeeded').length;
+        const failedCount = stats ? ((stats.failed || 0) + (stats.dead || 0)) : allJobs.filter(j => j.state === 'failed' || j.state === 'dead').length;
+
+        document.getElementById('statTotal').innerText = totalCount;
+        document.getElementById('statPending').innerText = pendingCount;
+        document.getElementById('statRunning').innerText = runningCount;
+        document.getElementById('statSucceeded').innerText = succeededCount;
+        document.getElementById('statFailed').innerText = failedCount;
       } catch (err) {
         console.error('Failed to load dashboard data:', err);
       }
@@ -701,10 +722,11 @@
             <td><span class="badge badge-${job.state}">${job.state}</span></td>
             <td>${job.attempt_count} / ${job.max_attempts}</td>
             <td><span style="color: var(--text-muted); font-size: 0.8rem;">${dateStr}</span></td>
-            <td style="text-align: right;">
+            <td style="text-align: right; white-space: nowrap;">
               <button class="btn btn-secondary btn-sm" onclick="inspectJob('${job.id}')">Inspect</button>
-              ${job.state === 'pending' ? `<button class="btn btn-secondary btn-sm" style="color: var(--accent-rose);" onclick="cancelJob('${job.id}')">Cancel</button>` : ''}
+              ${job.state === 'pending' ? `<button class="btn btn-secondary btn-sm" style="color: var(--accent-amber);" onclick="cancelJob('${job.id}')">Cancel</button>` : ''}
               ${(job.state === 'failed' || job.state === 'dead') ? `<button class="btn btn-secondary btn-sm" style="color: var(--accent-green);" onclick="retryJob('${job.id}')">Retry</button>` : ''}
+              <button class="btn btn-secondary btn-sm" style="color: var(--accent-rose);" onclick="deleteJob('${job.id}')">Delete</button>
             </td>
           </tr>
         `;
@@ -729,15 +751,22 @@
     }
 
     function applyPreset(type) {
-      document.getElementById('jobType').value = type;
       if (type === 'report.generate') {
+        document.getElementById('jobType').value = 'report.generate';
+        document.getElementById('jobMaxAttempts').value = 3;
         document.getElementById('jobPayload').value = JSON.stringify({ report_id: "rep-" + Math.floor(Math.random() * 900 + 100), format: "pdf" }, null, 2);
-      } else if (type === 'echo') {
-        document.getElementById('jobPayload').value = JSON.stringify({ message: "Hello from TaskFlow cluster!", timestamp: new Date().toISOString() }, null, 2);
       } else if (type === 'sleep') {
-        document.getElementById('jobPayload').value = JSON.stringify({ duration_ms: 2000 }, null, 2);
+        document.getElementById('jobType').value = 'sleep';
+        document.getElementById('jobMaxAttempts').value = 3;
+        document.getElementById('jobPayload').value = JSON.stringify({ duration_ms: 3000 }, null, 2);
       } else if (type === 'test.fail') {
-        document.getElementById('jobPayload').value = JSON.stringify({ reason: "Simulated upstream service error" }, null, 2);
+        document.getElementById('jobType').value = 'test.fail';
+        document.getElementById('jobMaxAttempts').value = 3;
+        document.getElementById('jobPayload').value = JSON.stringify({ message: "Network connection timeout to billing gateway" }, null, 2);
+      } else if (type === 'permanent.fail') {
+        document.getElementById('jobType').value = 'test.fail';
+        document.getElementById('jobMaxAttempts').value = 1;
+        document.getElementById('jobPayload').value = JSON.stringify({ message: "Fatal schema violation - unrecoverable payload" }, null, 2);
       }
     }
 
@@ -791,21 +820,29 @@
     }
 
     async function dispatchBatchJobs(count) {
-      showToast('Dispatching ' + count + ' concurrent jobs to worker pool...', 'success');
-      for (let i = 0; i < count; i++) {
+      showToast('Dispatching 5 diverse demo jobs (success, sleep, retry, dead-letter)...', 'success');
+      const demoJobs = [
+        { type: 'report.generate', max_attempts: 3, priority: 10, payload: { report_id: "rep-401", format: "pdf" } },
+        { type: 'sleep', max_attempts: 3, priority: 25, payload: { duration_ms: 4000 } },
+        { type: 'echo', max_attempts: 3, priority: 5, payload: { message: "Worker telemetry check", time: new Date().toISOString() } },
+        { type: 'test.fail', max_attempts: 3, priority: 15, payload: { message: "Simulated payment gateway timeout (3 attempts backoff)" } },
+        { type: 'test.fail', max_attempts: 1, priority: 20, payload: { message: "Simulated unrecoverable fatal syntax error" } }
+      ];
+
+      for (const item of demoJobs) {
         fetch('/api/v1/jobs', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             queue: 'default',
-            type: i % 2 === 0 ? 'report.generate' : 'echo',
-            priority: Math.floor(Math.random() * 50) + 1,
-            max_attempts: 3,
-            payload: { batch_index: i + 1, time: new Date().toISOString() }
+            type: item.type,
+            priority: item.priority,
+            max_attempts: item.max_attempts,
+            payload: item.payload
           })
         });
       }
-      setTimeout(fetchDashboardData, 600);
+      setTimeout(fetchDashboardData, 800);
     }
 
     async function inspectJob(jobID) {
@@ -889,6 +926,37 @@
       } catch (err) {
         showToast('Error: ' + err.message, 'error');
       }
+    }
+
+    async function deleteJob(jobID) {
+      if (!confirm('Permanently delete job ' + jobID.substring(0, 8) + '...?')) return;
+      try {
+        const res = await fetch('/api/v1/jobs/' + jobID, { method: 'DELETE' });
+        if (res.ok || res.status === 204) {
+          showToast('Job permanently deleted', 'success');
+          allJobs = allJobs.filter(j => j.id !== jobID);
+          renderJobsTable();
+          fetchDashboardData();
+        } else {
+          showToast('Failed to delete job', 'error');
+        }
+      } catch (err) {
+        showToast('Error deleting job: ' + err.message, 'error');
+      }
+    }
+
+    async function clearFinishedJobs() {
+      const finished = allJobs.filter(j => ['succeeded', 'dead', 'cancelled'].includes(j.state));
+      if (finished.length === 0) {
+        showToast('No finished jobs to clear', 'error');
+        return;
+      }
+      if (!confirm('Delete ' + finished.length + ' finished/dead jobs?')) return;
+      showToast('Deleting ' + finished.length + ' jobs...', 'success');
+      for (const job of finished) {
+        await fetch('/api/v1/jobs/' + job.id, { method: 'DELETE' });
+      }
+      fetchDashboardData();
     }
 
     function showToast(msg, type = 'success') {

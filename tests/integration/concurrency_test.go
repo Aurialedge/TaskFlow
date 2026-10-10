@@ -238,6 +238,13 @@ func (r *threadSafeMockRepo) QueueStats(ctx context.Context, queue string) (*dom
 	return &domain.QueueStats{Queue: queue}, nil
 }
 
+func (r *threadSafeMockRepo) DeleteJob(ctx context.Context, id uuid.UUID) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.jobs, id)
+	return nil
+}
+
 func TestIntegration_MultiWorkerConcurrency(t *testing.T) {
 	repo := newThreadSafeMockRepo()
 	registry := worker.NewDefaultRegistry()

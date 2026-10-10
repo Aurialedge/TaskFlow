@@ -653,6 +653,9 @@ func (r *JobRepository) ManualRetryJob(ctx context.Context, jobID uuid.UUID) (*d
 
 // QueueStats calculates depth and status counts for a queue.
 func (r *JobRepository) QueueStats(ctx context.Context, queue string) (*domain.QueueStats, error) {
+	q := strings.TrimSpace(queue)
+	isAll := q == "" || strings.EqualFold(q, "all")
+
 	query := `
 		SELECT
 			COALESCE(COUNT(*) FILTER (WHERE state = 'pending'), 0) AS pending,
@@ -664,10 +667,10 @@ func (r *JobRepository) QueueStats(ctx context.Context, queue string) (*domain.Q
 			COALESCE(COUNT(*) FILTER (WHERE state = 'cancelled'), 0) AS cancelled,
 			COUNT(*) AS total
 		FROM jobs
-		WHERE queue = $1;
+		WHERE ($1::boolean OR queue = $2);
 	`
 	stats := &domain.QueueStats{Queue: queue}
-	err := r.pool.QueryRow(ctx, query, strings.TrimSpace(queue)).Scan(
+	err := r.pool.QueryRow(ctx, query, isAll, q).Scan(
 		&stats.Pending,
 		&stats.Scheduled,
 		&stats.Running,
@@ -681,6 +684,19 @@ func (r *JobRepository) QueueStats(ctx context.Context, queue string) (*domain.Q
 		return nil, fmt.Errorf("failed to query queue stats: %w", err)
 	}
 	return stats, nil
+}
+
+// DeleteJob permanently deletes a job and its execution attempt history (via ON DELETE CASCADE).
+func (r *JobRepository) DeleteJob(ctx context.Context, jobID uuid.UUID) error {
+	query := `DELETE FROM jobs WHERE id = $1;`
+	tag, err := r.pool.Exec(ctx, query, jobID)
+	if err != nil {
+		return fmt.Errorf("failed to delete job: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return domain.ErrJobNotFound
+	}
+	return nil
 }
 
 type rowScanner interface {

@@ -128,8 +128,9 @@ func (m *mockRepoForHandler) ManualRetryJob(ctx context.Context, jobID uuid.UUID
 
 func (m *mockRepoForHandler) QueueStats(ctx context.Context, queue string) (*domain.QueueStats, error) {
 	stats := &domain.QueueStats{Queue: queue}
+	isAll := queue == "" || queue == "all"
 	for _, j := range m.jobs {
-		if j.Queue == queue {
+		if isAll || j.Queue == queue {
 			stats.Total++
 			switch j.State {
 			case domain.StatePending:
@@ -148,6 +149,14 @@ func (m *mockRepoForHandler) QueueStats(ctx context.Context, queue string) (*dom
 		}
 	}
 	return stats, nil
+}
+
+func (m *mockRepoForHandler) DeleteJob(ctx context.Context, id uuid.UUID) error {
+	if _, ok := m.jobs[id]; !ok {
+		return domain.ErrJobNotFound
+	}
+	delete(m.jobs, id)
+	return nil
 }
 
 func setupTestApp() (*mockRepoForHandler, http.Handler) {
@@ -467,5 +476,37 @@ func TestJobHandler_GetQueueStats(t *testing.T) {
 	}
 	if stats.Total != 2 {
 		t.Errorf("expected total 2, got %d", stats.Total)
+	}
+}
+
+func TestJobHandler_DeleteJob(t *testing.T) {
+	_, router := setupTestApp()
+
+	// 1. Submit a job first
+	postRec := httptest.NewRecorder()
+	postReq := httptest.NewRequest(http.MethodPost, "/api/v1/jobs", bytes.NewBufferString(`{"type":"delete_me","queue":"default"}`))
+	router.ServeHTTP(postRec, postReq)
+
+	var created domain.Job
+	if err := json.Unmarshal(postRec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("failed to decode created job: %v", err)
+	}
+
+	// 2. Delete the job
+	delRec := httptest.NewRecorder()
+	delReq := httptest.NewRequest(http.MethodDelete, "/api/v1/jobs/"+created.ID.String(), nil)
+	router.ServeHTTP(delRec, delReq)
+
+	if delRec.Code != http.StatusNoContent {
+		t.Fatalf("expected 204 No Content on delete, got %d", delRec.Code)
+	}
+
+	// 3. Delete again -> 404 Not Found
+	delRec2 := httptest.NewRecorder()
+	delReq2 := httptest.NewRequest(http.MethodDelete, "/api/v1/jobs/"+created.ID.String(), nil)
+	router.ServeHTTP(delRec2, delReq2)
+
+	if delRec2.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 Not Found on re-delete, got %d", delRec2.Code)
 	}
 }

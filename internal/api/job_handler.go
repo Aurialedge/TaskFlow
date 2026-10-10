@@ -264,6 +264,27 @@ func (h *JobHandler) GetQueueStats(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, stats)
 }
 
+// DeleteJob handles DELETE /api/v1/jobs/{id}.
+func (h *JobHandler) DeleteJob(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	jobID, err := uuid.Parse(idStr)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "INVALID_UUID", "invalid job UUID format")
+		return
+	}
+
+	if err := h.jobService.DeleteJob(r.Context(), jobID); err != nil {
+		if errors.Is(err, domain.ErrJobNotFound) {
+			respondError(w, http.StatusNotFound, "NOT_FOUND", "job not found")
+			return
+		}
+		respondError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to delete job: "+err.Error())
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func respondError(w http.ResponseWriter, statusCode int, code, message string) {
 	respondJSON(w, statusCode, APIError{
 		Error: ErrorDetail{

@@ -57,4 +57,7 @@ type JobRepository interface {
 
 	// QueueStats calculates depth and status counts for a queue.
 	QueueStats(ctx context.Context, queue string) (*domain.QueueStats, error)
+
+	// DeleteJob permanently deletes a job and its execution attempt history.
+	DeleteJob(ctx context.Context, id uuid.UUID) error
 }

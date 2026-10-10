@@ -67,6 +67,9 @@ func (b *benchMockRepo) ManualRetryJob(ctx context.Context, jobID uuid.UUID) (*d
 func (b *benchMockRepo) QueueStats(ctx context.Context, queue string) (*domain.QueueStats, error) {
 	return &domain.QueueStats{Queue: queue}, nil
 }
+func (b *benchMockRepo) DeleteJob(ctx context.Context, id uuid.UUID) error {
+	return nil
+}
 
 func BenchmarkJobSubmission(b *testing.B) {
 	repo := &benchMockRepo{}

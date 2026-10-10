@@ -127,8 +127,9 @@ func (m *mockJobRepo) ManualRetryJob(ctx context.Context, jobID uuid.UUID) (*dom
 
 func (m *mockJobRepo) QueueStats(ctx context.Context, queue string) (*domain.QueueStats, error) {
 	stats := &domain.QueueStats{Queue: queue}
+	isAll := queue == "" || queue == "all"
 	for _, j := range m.createdJobs {
-		if j.Queue == queue {
+		if isAll || j.Queue == queue {
 			stats.Total++
 			switch j.State {
 			case domain.StatePending:
@@ -147,6 +148,14 @@ func (m *mockJobRepo) QueueStats(ctx context.Context, queue string) (*domain.Que
 		}
 	}
 	return stats, nil
+}
+
+func (m *mockJobRepo) DeleteJob(ctx context.Context, id uuid.UUID) error {
+	if _, ok := m.createdJobs[id]; !ok {
+		return domain.ErrJobNotFound
+	}
+	delete(m.createdJobs, id)
+	return nil
 }
 
 func TestJobService_SubmitJob(t *testing.T) {
@@ -367,5 +376,34 @@ func TestJobService_GetQueueStats(t *testing.T) {
 	}
 	if stats.Pending != 2 {
 		t.Errorf("expected pending 2, got %d", stats.Pending)
+	}
+
+	// Test all queues stats
+	allStats, err := svc.GetQueueStats(ctx, "all")
+	if err != nil {
+		t.Fatalf("unexpected all stats error: %v", err)
+	}
+	if allStats.Total != 2 {
+		t.Errorf("expected all stats total 2, got %d", allStats.Total)
+	}
+}
+
+func TestJobService_DeleteJob(t *testing.T) {
+	repo := newMockJobRepo()
+	svc := NewJobService(repo)
+	ctx := context.Background()
+
+	job, _, err := svc.SubmitJob(ctx, domain.CreateJobInput{Type: "echo", Queue: "default"})
+	if err != nil {
+		t.Fatalf("failed to submit job: %v", err)
+	}
+
+	if err := svc.DeleteJob(ctx, job.ID); err != nil {
+		t.Fatalf("failed to delete job: %v", err)
+	}
+
+	// Attempting to delete again should return not found
+	if err := svc.DeleteJob(ctx, job.ID); !errors.Is(err, domain.ErrJobNotFound) {
+		t.Fatalf("expected ErrJobNotFound on re-delete, got %v", err)
 	}
 }

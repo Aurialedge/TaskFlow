@@ -116,6 +116,10 @@ func (m *mockRepoForWorker) QueueStats(ctx context.Context, queue string) (*doma
 	return nil, nil
 }
 
+func (m *mockRepoForWorker) DeleteJob(ctx context.Context, id uuid.UUID) error {
+	return nil
+}
+
 func TestPool_SuccessfulExecution(t *testing.T) {
 	repo := newMockRepoForWorker()
 	registry := NewDefaultRegistry()

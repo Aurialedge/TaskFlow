@@ -157,7 +157,12 @@ func (s *JobService) ManualRetryJob(ctx context.Context, id uuid.UUID) (*domain.
 func (s *JobService) GetQueueStats(ctx context.Context, queue string) (*domain.QueueStats, error) {
 	q := strings.TrimSpace(queue)
 	if q == "" {
-		q = DefaultQueue
+		q = "all"
 	}
 	return s.repo.QueueStats(ctx, q)
+}
+
+// DeleteJob permanently deletes a job and its attempt records.
+func (s *JobService) DeleteJob(ctx context.Context, id uuid.UUID) error {
+	return s.repo.DeleteJob(ctx, id)
 }

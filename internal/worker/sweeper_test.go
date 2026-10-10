@@ -59,6 +59,9 @@ func (m *mockRepoForSweeper) ManualRetryJob(ctx context.Context, jobID uuid.UUID
 func (m *mockRepoForSweeper) QueueStats(ctx context.Context, queue string) (*domain.QueueStats, error) {
 	return nil, nil
 }
+func (m *mockRepoForSweeper) DeleteJob(ctx context.Context, id uuid.UUID) error {
+	return nil
+}
 
 func (m *mockRepoForSweeper) RecoverAbandonedJobs(ctx context.Context, defaultLeaseDuration time.Duration) (int64, error) {
 	m.mu.Lock()
