@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -25,4 +26,16 @@ type JobRepository interface {
 
 	// GetAttempts retrieves all execution attempts recorded for a job.
 	GetAttempts(ctx context.Context, jobID uuid.UUID) ([]*domain.JobAttempt, error)
+
+	// ClaimJobs atomically finds eligible jobs and leases them to workerID using SELECT FOR UPDATE SKIP LOCKED.
+	ClaimJobs(ctx context.Context, queue string, limit int, workerID string, leaseDuration time.Duration) ([]*domain.Job, error)
+
+	// RecordSuccess marks a job as succeeded and records its output result.
+	RecordSuccess(ctx context.Context, jobID uuid.UUID, leaseToken uuid.UUID, result []byte) error
+
+	// RecordFailure marks a job as failed and records its error message.
+	RecordFailure(ctx context.Context, jobID uuid.UUID, leaseToken uuid.UUID, errMsg string) error
+
+	// RecordAttempt records an execution attempt in the job_attempts table.
+	RecordAttempt(ctx context.Context, attempt *domain.JobAttempt) error
 }

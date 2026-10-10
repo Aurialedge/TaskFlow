@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -70,6 +71,22 @@ func (m *mockRepoForHandler) ListJobs(ctx context.Context, filter domain.ListJob
 
 func (m *mockRepoForHandler) GetAttempts(ctx context.Context, jobID uuid.UUID) ([]*domain.JobAttempt, error) {
 	return []*domain.JobAttempt{}, nil
+}
+
+func (m *mockRepoForHandler) ClaimJobs(ctx context.Context, queue string, limit int, workerID string, leaseDuration time.Duration) ([]*domain.Job, error) {
+	return nil, nil
+}
+
+func (m *mockRepoForHandler) RecordSuccess(ctx context.Context, jobID uuid.UUID, leaseToken uuid.UUID, result []byte) error {
+	return nil
+}
+
+func (m *mockRepoForHandler) RecordFailure(ctx context.Context, jobID uuid.UUID, leaseToken uuid.UUID, errMsg string) error {
+	return nil
+}
+
+func (m *mockRepoForHandler) RecordAttempt(ctx context.Context, attempt *domain.JobAttempt) error {
+	return nil
 }
 
 func setupTestApp() (*mockRepoForHandler, http.Handler) {

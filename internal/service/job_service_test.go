@@ -72,6 +72,22 @@ func (m *mockJobRepo) GetAttempts(ctx context.Context, jobID uuid.UUID) ([]*doma
 	return m.attempts[jobID], nil
 }
 
+func (m *mockJobRepo) ClaimJobs(ctx context.Context, queue string, limit int, workerID string, leaseDuration time.Duration) ([]*domain.Job, error) {
+	return nil, nil
+}
+
+func (m *mockJobRepo) RecordSuccess(ctx context.Context, jobID uuid.UUID, leaseToken uuid.UUID, result []byte) error {
+	return nil
+}
+
+func (m *mockJobRepo) RecordFailure(ctx context.Context, jobID uuid.UUID, leaseToken uuid.UUID, errMsg string) error {
+	return nil
+}
+
+func (m *mockJobRepo) RecordAttempt(ctx context.Context, attempt *domain.JobAttempt) error {
+	return nil
+}
+
 func TestJobService_SubmitJob(t *testing.T) {
 	ctx := context.Background()
 

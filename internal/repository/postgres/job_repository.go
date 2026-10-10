@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -230,6 +231,163 @@ func (r *JobRepository) GetAttempts(ctx context.Context, jobID uuid.UUID) ([]*do
 	}
 
 	return attempts, rows.Err()
+}
+
+// ClaimJobs atomically finds eligible pending/scheduled jobs and leases them to workerID using FOR UPDATE SKIP LOCKED.
+func (r *JobRepository) ClaimJobs(ctx context.Context, queue string, limit int, workerID string, leaseDuration time.Duration) ([]*domain.Job, error) {
+	if limit <= 0 {
+		limit = 1
+	}
+
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin transaction for claiming jobs: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var query string
+	var rows pgx.Rows
+	if strings.TrimSpace(queue) != "" {
+		query = `
+			SELECT id, queue, type, payload, state, priority, max_attempts, attempt_count,
+			       run_at, timeout_seconds, lease_token, lease_expires_at, lease_generation,
+			       idempotency_key, idempotency_scope, result, last_error, created_at, updated_at
+			FROM jobs
+			WHERE queue = $1 AND state IN ('pending', 'scheduled') AND run_at <= NOW()
+			ORDER BY priority DESC, created_at ASC
+			LIMIT $2
+			FOR UPDATE SKIP LOCKED;
+		`
+		rows, err = tx.Query(ctx, query, strings.TrimSpace(queue), limit)
+	} else {
+		query = `
+			SELECT id, queue, type, payload, state, priority, max_attempts, attempt_count,
+			       run_at, timeout_seconds, lease_token, lease_expires_at, lease_generation,
+			       idempotency_key, idempotency_scope, result, last_error, created_at, updated_at
+			FROM jobs
+			WHERE state IN ('pending', 'scheduled') AND run_at <= NOW()
+			ORDER BY priority DESC, created_at ASC
+			LIMIT $1
+			FOR UPDATE SKIP LOCKED;
+		`
+		rows, err = tx.Query(ctx, query, limit)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to select jobs for claiming: %w", err)
+	}
+
+	var claimed []*domain.Job
+	for rows.Next() {
+		job, err := scanJob(rows)
+		if err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("failed to scan job during claim: %w", err)
+		}
+		claimed = append(claimed, job)
+	}
+	rows.Close()
+
+	if len(claimed) == 0 {
+		return nil, nil
+	}
+
+	now := time.Now().UTC()
+	expiresAt := now.Add(leaseDuration)
+
+	for _, job := range claimed {
+		token := uuid.New()
+		job.LeaseToken = &token
+		job.LeaseExpiresAt = &expiresAt
+		job.LeaseGeneration++
+		job.AttemptCount++
+		job.State = domain.StateRunning
+		job.UpdatedAt = now
+
+		updateQuery := `
+			UPDATE jobs
+			SET state = 'running',
+			    lease_token = $2,
+			    lease_expires_at = $3,
+			    lease_generation = lease_generation + 1,
+			    attempt_count = attempt_count + 1,
+			    updated_at = $4
+			WHERE id = $1;
+		`
+		if _, err := tx.Exec(ctx, updateQuery, job.ID, job.LeaseToken, job.LeaseExpiresAt, now); err != nil {
+			return nil, fmt.Errorf("failed to update claimed job %s: %w", job.ID, err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("failed to commit claimed jobs: %w", err)
+	}
+
+	return claimed, nil
+}
+
+// RecordSuccess marks a job as succeeded and records its output result.
+func (r *JobRepository) RecordSuccess(ctx context.Context, jobID uuid.UUID, leaseToken uuid.UUID, result []byte) error {
+	now := time.Now().UTC()
+	query := `
+		UPDATE jobs
+		SET state = 'succeeded',
+		    result = $3,
+		    last_error = NULL,
+		    lease_token = NULL,
+		    lease_expires_at = NULL,
+		    updated_at = $4
+		WHERE id = $1 AND lease_token = $2;
+	`
+	res, err := r.pool.Exec(ctx, query, jobID, leaseToken, result, now)
+	if err != nil {
+		return fmt.Errorf("failed to record job success: %w", err)
+	}
+	if res.RowsAffected() == 0 {
+		return fmt.Errorf("job success not recorded: lease token mismatch or job no longer active")
+	}
+	return nil
+}
+
+// RecordFailure marks a job as failed and records its error message.
+func (r *JobRepository) RecordFailure(ctx context.Context, jobID uuid.UUID, leaseToken uuid.UUID, errMsg string) error {
+	now := time.Now().UTC()
+	query := `
+		UPDATE jobs
+		SET state = 'failed',
+		    last_error = $3,
+		    lease_token = NULL,
+		    lease_expires_at = NULL,
+		    updated_at = $4
+		WHERE id = $1 AND lease_token = $2;
+	`
+	res, err := r.pool.Exec(ctx, query, jobID, leaseToken, errMsg, now)
+	if err != nil {
+		return fmt.Errorf("failed to record job failure: %w", err)
+	}
+	if res.RowsAffected() == 0 {
+		return fmt.Errorf("job failure not recorded: lease token mismatch or job no longer active")
+	}
+	return nil
+}
+
+// RecordAttempt records an execution attempt in the job_attempts table.
+func (r *JobRepository) RecordAttempt(ctx context.Context, attempt *domain.JobAttempt) error {
+	query := `
+		INSERT INTO job_attempts (
+			job_id, attempt_number, worker_id, state, error_message, started_at, finished_at, duration_ms
+		) VALUES (
+			$1, $2, $3, $4, $5, $6, $7, $8
+		)
+		RETURNING id;
+	`
+	err := r.pool.QueryRow(ctx, query,
+		attempt.JobID, attempt.AttemptNumber, attempt.WorkerID, string(attempt.State),
+		attempt.ErrorMessage, attempt.StartedAt, attempt.FinishedAt, attempt.DurationMs,
+	).Scan(&attempt.ID)
+	if err != nil {
+		return fmt.Errorf("failed to record attempt: %w", err)
+	}
+	return nil
 }
 
 type rowScanner interface {
